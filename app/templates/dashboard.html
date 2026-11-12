@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Support Assistant Metrics</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --surface-0: #f4f4f2; --surface-1: #fcfcfb; --border: #e3e2de;
+      --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+      --grid: #ecebe7; --series-1: #2a78d6;
+      --good: #1a7f37; --critical: #c62828;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --surface-0: #111110; --surface-1: #1a1a19; --border: #2e2e2c;
+        --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e88;
+        --grid: #2a2a28; --series-1: #3987e5;
+        --good: #4ac26b; --critical: #ef6b6b;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+           font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+    header { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; justify-content: space-between; }
+    h1 { font-size: 20px; margin: 0; }
+    h2 { font-size: 14px; font-weight: 600; margin: 0 0 12px; color: var(--text-secondary); }
+    .window { color: var(--text-muted); font-size: 13px; }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 20px 0; }
+    .tile, .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+    .tile .label { color: var(--text-secondary); font-size: 12px; }
+    .tile .value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+    .tile .sub { color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+    .chart-box { position: relative; height: 240px; }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-secondary); font-weight: 600; font-size: 12px; }
+    td.num, th.num { text-align: right; }
+    .status-bad { color: var(--critical); }
+    .status-ok { color: var(--good); }
+    .empty { color: var(--text-muted); padding: 24px 0; text-align: center; }
+    form.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    form.filters input { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+    form.filters button { background: var(--series-1); color: #fff; border: 0; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+    .section { margin-top: 12px; }
+  </style>
+</head>
+<body>
+<main>
+  {% set c = summary.chats %}
+  <header>
+    <div>
+      <h1>Support Assistant — Metrics</h1>
+      <div class="window">{{ summary.window.from[:16].replace('T',' ') }} → {{ summary.window.to[:16].replace('T',' ') }} UTC{% if company %} · {{ company }}{% endif %}</div>
+    </div>
+    <form class="filters" method="get">
+      {% if request.query_params.get('key') %}<input type="hidden" name="key" value="{{ request.query_params.get('key') }}">{% endif %}
+      <label>Company <input name="company" value="{{ company or '' }}" placeholder="all" size="10"></label>
+      <button type="submit">Apply</button>
+    </form>
+  </header>
+
+  <section class="tiles" aria-label="Key figures">
+    <div class="tile"><div class="label">Chats</div><div class="value">{{ c.total }}</div><div class="sub">{{ c.success }} ok · {{ c.error }} failed</div></div>
+    <div class="tile"><div class="label">Error rate</div><div class="value {{ 'status-bad' if c.error_rate > 0.05 else '' }}">{{ '%.1f' % (c.error_rate * 100) }}%</div><div class="sub">{{ 'above 5% target' if c.error_rate > 0.05 else 'within target' }}</div></div>
+    <div class="tile"><div class="label">Latency p50</div><div class="value">{{ '%.0f' % c.latency_ms.p50 if c.latency_ms.p50 is not none else '—' }}<span class="sub"> ms</span></div><div class="sub">avg {{ '%.0f' % c.latency_ms.avg if c.latency_ms.avg is not none else '—' }} · p95 {{ '%.0f' % c.latency_ms.p95 if c.latency_ms.p95 is not none else '—' }}</div></div>
+    <div class="tile"><div class="label">Tokens</div><div class="value">{{ '{:,}'.format(c.tokens.input + c.tokens.output) }}</div><div class="sub">{{ '{:,}'.format(c.tokens.input) }} in · {{ '{:,}'.format(c.tokens.output) }} out</div></div>
+    <div class="tile"><div class="label">Escalation rate</div><div class="value">{{ '%.1f' % (c.escalation_rate * 100) }}%</div><div class="sub">high {{ c.confidence_breakdown.high }} · med {{ c.confidence_breakdown.medium }} · low {{ c.confidence_breakdown.low }}</div></div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Chats per day</h2>
+      {% if summary.daily_volume %}<div class="chart-box"><canvas id="daily" role="img" aria-label="Bar chart of chats per day"></canvas></div>
+      {% else %}<div class="empty">No chats in this window</div>{% endif %}
+    </section>
+    <section class="card">
+      <h2>Chats by company</h2>
+      {% if summary.by_company %}<div class="chart-box"><canvas id="companies" role="img" aria-label="Bar chart of chats per company"></canvas></div>
+      {% else %}<div class="empty">No chats in this window</div>{% endif %}
+    </section>
+  </div>
+
+  <div class="grid section">
+    <section class="card">
+      <h2>Per company</h2>
+      <table>
+        <thead><tr><th>Company</th><th class="num">Chats</th><th class="num">Avg latency (ms)</th><th class="num">Error rate</th></tr></thead>
+        <tbody>
+        {% for row in summary.by_company %}
+          <tr><td>{{ row.company }}</td><td class="num">{{ row.chats }}</td><td class="num">{{ '%.0f' % row.avg_latency_ms if row.avg_latency_ms is not none else '—' }}</td><td class="num {{ 'status-bad' if row.error_rate > 0.05 else '' }}">{{ '%.1f' % (row.error_rate * 100) }}%</td></tr>
+        {% else %}<tr><td colspan="4" class="empty">No data</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </section>
+    <section class="card">
+      <h2>Guideline ingestion</h2>
+      {% set i = summary.ingestion %}
+      <table>
+        <tbody>
+          <tr><th>Uploads</th><td class="num">{{ i.uploads }}</td></tr>
+          <tr><th>Ready</th><td class="num status-ok">{{ i.ready }}</td></tr>
+          <tr><th>Failed</th><td class="num {{ 'status-bad' if i.failed else '' }}">{{ i.failed }}</td></tr>
+          <tr><th>Avg duration</th><td class="num">{{ '{:,}'.format(i.avg_duration_ms) ~ ' ms' if i.avg_duration_ms is not none else '—' }}</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+</main>
+<script>
+  const summary = {{ summary | tojson }};
+  if (window.Chart) {
+    const css = getComputedStyle(document.documentElement);
+    const v = (n) => css.getPropertyValue(n).trim();
+    Chart.defaults.color = v('--text-secondary');
+    Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+    const base = (horizontal) => ({
+      responsive: true, maintainAspectRatio: false, indexAxis: horizontal ? 'y' : 'x',
+      plugins: { legend: { display: false }, tooltip: { intersect: false, mode: 'index' } },
+      scales: {
+        [horizontal ? 'y' : 'x']: { grid: { display: false }, border: { color: v('--border') } },
+        [horizontal ? 'x' : 'y']: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: v('--grid') }, border: { display: false } },
+      },
+    });
+    const bar = { backgroundColor: v('--series-1'), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 28 };
+    const daily = document.getElementById('daily');
+    if (daily) new Chart(daily, { type: 'bar', options: base(false), data: {
+      labels: summary.daily_volume.map(d => d.date),
+      datasets: [{ label: 'Chats', data: summary.daily_volume.map(d => d.chats), ...bar }] } });
+    const comp = document.getElementById('companies');
+    if (comp) new Chart(comp, { type: 'bar', options: base(true), data: {
+      labels: summary.by_company.map(d => d.company),
+      datasets: [{ label: 'Chats', data: summary.by_company.map(d => d.chats), ...bar }] } });
+  }
+</script>
+</body>
+</html>
