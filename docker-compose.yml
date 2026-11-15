@@ -1,0 +1,13 @@
+# Optional: run the API in a container. The database is NOT here — it comes from the Supabase CLI
+# (`make db-up`) running on the host. In .env, point DATABASE_URL at host.docker.internal:
+#   DATABASE_URL=postgresql+asyncpg://postgres:postgres@host.docker.internal:55422/postgres
+services:
+  api:
+    build: .
+    env_file: .env
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # needed on Linux
+    restart: unless-stopped
+# No volumes: all state (including the pgvector index) lives in Postgres.
