@@ -83,6 +83,57 @@ class RetrievalError(DomainError):
     code, status_code, default_message = "RETRIEVAL_ERROR", 502, "Guideline retrieval failed"
 
 
+class UnsupportedFormat(DomainError):
+    code, status_code, default_message = "UNSUPPORTED_FORMAT", 422, "Unsupported file format"
+
+
+class VersionNotApproved(DomainError):
+    code, status_code, default_message = "VERSION_NOT_APPROVED", 409, "Version is not approved"
+
+
+class CompileError(DomainError):
+    code, status_code, default_message = "COMPILE_ERROR", 422, "Guideline compilation failed"
+
+
+class CapabilityNotBound(DomainError):
+    code, status_code = "CAPABILITY_NOT_BOUND", 409
+    default_message = "Capability has no live binding for this company"
+
+
+class UnknownCapability(DomainError):
+    code, status_code, default_message = "VALIDATION_ERROR", 422, "Unknown capability"
+
+
+class BindingNotTested(DomainError):
+    code, status_code = "BINDING_NOT_TESTED", 409
+    default_message = "Binding must pass a test before going live"
+
+
+class PolicyViolation(DomainError):
+    code, status_code, default_message = "POLICY_VIOLATION", 409, "Action violates policy"
+
+
+class ActionNotPending(DomainError):
+    code, status_code, default_message = "ACTION_NOT_PENDING", 409, "Action is not pending"
+
+
+class ToolError(DomainError):
+    code, status_code, default_message = "TOOL_ERROR", 502, "Capability call failed"
+
+
+class NotFound(DomainError):
+    code, status_code, default_message = "NOT_FOUND", 404, "Not found"
+
+
+class Conflict(DomainError):
+    code, status_code, default_message = "CONFLICT", 409, "Conflict"
+
+
+class SecretsUnavailable(DomainError):
+    code, status_code = "VALIDATION_ERROR", 422
+    default_message = "SECRETS_ENCRYPTION_KEY is not configured"
+
+
 class ValidationFailed(DomainError):
     code, status_code, default_message = "VALIDATION_ERROR", 422, "Invalid request"
 

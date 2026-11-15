@@ -1,7 +1,6 @@
-"""Opt-in live smoke test: real Gemini embeddings + LLM against local Supabase.
-
-Skipped unless GOOGLE_API_KEY is set (env or .env), the bookshop seed file exists and the
-integration database is reachable. Run with: pytest -m live
+"""Opt-in live smoke test: real Gemini compiler, router, generator and embeddings against local
+Supabase. Skipped unless GOOGLE_API_KEY is set (env or .env), the bookshop seed file exists and
+the integration database is reachable. Run with: pytest -m live
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ SEED = Path(__file__).resolve().parents[2] / "data" / "seed_guidelines" / "books
 
 
 @pytest.fixture
-def live_settings(pg_url: str, tmp_path: Path) -> Settings:  # noqa: F811
+def live_settings(pg_url: str) -> Settings:  # noqa: F811
     env = Settings()
     if not env.GOOGLE_API_KEY:
         pytest.skip("GOOGLE_API_KEY not set")
@@ -27,13 +26,13 @@ def live_settings(pg_url: str, tmp_path: Path) -> Settings:  # noqa: F811
         pytest.skip(f"seed file missing: {SEED}")
     return make_settings(
         DATABASE_URL=pg_url,
-        CHROMA_PERSIST_DIR=str(tmp_path / "chroma"),
         GOOGLE_API_KEY=env.GOOGLE_API_KEY.get_secret_value(),
         LLM_MODEL=env.LLM_MODEL,
+        ROUTER_MODEL=env.ROUTER_MODEL,
+        COMPILER_MODEL=env.COMPILER_MODEL,
         EMBEDDING_MODEL=env.EMBEDDING_MODEL,
-        CHUNK_SIZE=env.CHUNK_SIZE,
-        CHUNK_OVERLAP=env.CHUNK_OVERLAP,
-        RAG_TOP_K=env.RAG_TOP_K,
+        AUTO_APPROVE_MIN_ROUTING_TOP1=0.0,
+        TOOL_TIMEOUT_SECONDS=10,
     )
 
 
@@ -53,9 +52,12 @@ async def test_live_bookshop_question(live_settings: Settings) -> None:
             "/api/v1/companies/bookshop/guidelines",
             files={"file": ("bookshop.txt", SEED.read_bytes(), "text/plain")},
             headers=ADMIN_HEADERS,
+            timeout=600,
         )
         assert r.status_code == 201, r.text
-        assert r.json()["status"] == "ready", r.json()["error_message"]
+        v = r.json()
+        assert v["status"] == "ready", v["error_message"]
+        assert v["intent_count"] and v["intent_count"] >= 3
 
         r = await client.post(
             "/api/v1/chats",
@@ -70,5 +72,5 @@ async def test_live_bookshop_question(live_settings: Settings) -> None:
         assert r.status_code == 201, r.text
         g = r.json()["guidance"]
         assert g["recommended_response"].strip()
+        assert g["detected_intents"], g
         assert g["confidence"] in {"high", "medium", "low"}
-        assert all(ref.split(":")[0] for ref in g["guideline_references"])

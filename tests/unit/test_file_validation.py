@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.errors import FileTooLarge, InvalidFile
+from app.core.errors import DomainError, FileTooLarge, InvalidFile
 from app.services.ingestion_service import decode_text, validate_upload
 
 
@@ -22,9 +22,9 @@ def test_latin1_fallback_when_clean() -> None:
 
 @pytest.mark.parametrize("name", ["guide.pdf", "guide.txt.exe", "guide", None, ""])
 def test_wrong_extension(name: str | None) -> None:
-    with pytest.raises(InvalidFile) as exc:
+    with pytest.raises(DomainError) as exc:
         validate_upload(name, b"hello", 1000)
-    assert exc.value.code == "INVALID_FILE"
+    assert exc.value.code == "UNSUPPORTED_FORMAT"
 
 
 @pytest.mark.parametrize("content", [b"", b"   \n\t  \r\n"])

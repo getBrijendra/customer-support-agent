@@ -19,13 +19,13 @@ async def health() -> HealthOut:
 @router.get(
     "/ready",
     response_model=HealthOut,
-    summary="Readiness probe (DB + vector store)",
+    summary="Readiness probe (DB + pgvector search index)",
     responses={503: {"model": HealthOut}},
 )
 async def ready(resources: Resources = Depends(get_resources)) -> JSONResponse:
     checks = {
         "database": await ping(resources.engine),
-        "vector_store": await resources.vector_store.healthcheck(),
+        "search_index": await resources.search.healthcheck(),
     }
     ok = all(checks.values())
     body = HealthOut(status="ok" if ok else "degraded", checks=checks)

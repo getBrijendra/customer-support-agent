@@ -1,214 +1,307 @@
-# Support Guidance Assistant
+# Support Guidance Assistant (v2)
 
-A FastAPI back end that gives customer-support agents an AI-recommended reply plus handling
-instructions for a customer message. The guidance is grounded in **that company's own support
-guidelines**, which are retrieved with RAG from versioned `.txt` uploads.
+A FastAPI back end that gives customer-support agents a ready-to-send reply plus a step-by-step
+handling plan for a customer message, grounded in **that company's own support guidelines**.
 
-- **LLM and embeddings:** Google Gemini via LangChain. Model names come from config; the defaults are `gemini-3.1-pro-preview` and `gemini-embedding-2`.
-- **Relational DB:** Supabase Postgres. Local development uses the Supabase CLI and production uses hosted Supabase. The app uses SQLAlchemy 2 async with asyncpg, and **Alembic owns the schema**.
-- **Vectors:** ChromaDB in local persistent mode, behind a `VectorStoreGateway` interface. Each (company, version) pair gets its own collection.
+How it works in one paragraph:
+1. Each guideline upload is **compiled** into structured data in Postgres: intents with typed playbook steps, company-wide rules, and reference facts.
+2. Chats are **routed** to the right intents (several when needed) with hybrid search (pgvector + Postgres full-text) and a fast router LLM.
+3. The harness can **look up** data in the company's own systems (MCP server, HTTP API, read-only SQL) and **proposes** writes (refunds, resets) that the agent approves.
+
+- **LLMs and embeddings:** Google Gemini via LangChain, with three roles: generator (Pro), compiler (Pro) and router (Flash-Lite). Model names come from config.
+- **Database and search:** Supabase Postgres with **pgvector**. The Supabase CLI runs it locally and hosted Supabase in production. The app uses SQLAlchemy 2 async with asyncpg, and **Alembic owns the schema**. There is no separate vector database.
+- **Chat harness:** a [LangGraph](https://github.com/langchain-ai/langgraph) graph that runs **in-process** inside the API. There is no LangGraph Platform or LangSmith deployment.
 
 ```
-api (routers, no logic/SQL) ─▶ services ─▶ repositories (all SQL)
-                                        ├▶ vectorstore (only place importing chromadb)
-                                        └▶ ai (providers, prompt, structured-output chain)
+api (routers) ─▶ services ─▶ repositories (all SQL, incl. pgvector search)
+                         ├▶ harness (LangGraph: route ∥ facts → prefetch → tool loop → generate → gate → persist)
+                         ├▶ ai (compiler, router, generator, prompts, heuristic offline fakes)
+                         ├▶ documents (parser interface; .txt only)
+                         ├▶ search (SearchGateway → pgvector + tsvector, RRF)
+                         └▶ capabilities (registry, gateway, policy, secrets, adapters: mcp/http/sql_readonly/mock)
 ```
+
+See [architecture.md](architecture.md) for diagrams and the key decisions, and
+[claude.md](claude.md) for the full build spec.
 
 ---
 
 ## First-time local setup
 
-1. Install Docker and the Supabase CLI (`brew install supabase/tap/supabase`, the official binary, or use `npx supabase`; the Makefile falls back to `npx` automatically). Then run `uv sync`.
-2. Run `cp .env.example .env`, then add `GOOGLE_API_KEY` and your own `AGENT_API_KEYS` / `ADMIN_API_KEYS`.
-3. Run `make db-up`, then confirm the URL with `supabase status`.
+1. Install Docker and the Supabase CLI (`brew install supabase/tap/supabase`, the official binary, or `npx supabase`; the Makefile falls back to `npx`). Then run `uv sync`.
+2. Run `cp .env.example .env`. Add `GOOGLE_API_KEY`, your own `AGENT_API_KEYS` / `ADMIN_API_KEYS`, and a `SECRETS_ENCRYPTION_KEY` (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
+3. Run `make db-up`, then confirm the DB URL with `supabase status`.
 4. Run `make migrate && make seed`.
 5. Run `make run` and open <http://127.0.0.1:8000/docs>.
 6. Run `make test`.
 
-> **Ports:** `supabase/config.toml` moves this project to the **554xx** port range (DB `55422`,
-> Studio `55423`, API `55421`) so it can run alongside other local Supabase projects on the
-> default 543xx ports. Always copy the DB URL from `supabase status` into `.env`. Change the
-> scheme to `postgresql+asyncpg://`.
+> **Ports:** `supabase/config.toml` moves this project to the **554xx** range (DB `55422`, Studio
+> `55423`) so it can run next to other local Supabase projects. Always copy the DB URL from
+> `supabase status` into `.env`, with the scheme changed to `postgresql+asyncpg://`.
 
-`make db-up` runs `supabase start` and then `scripts/create_test_db.py`. That script creates
-the `support_assistant_test` database for the integration tests, using asyncpg so `psql` isn't
-needed. `make db-down` stops the stack; your data survives restarts. `make db-reset` wipes the
-local DB and re-runs the migrations and the seed.
+`make db-up` runs `supabase start` and then `scripts/create_test_db.py`, which creates
+`support_assistant_test` for the integration tests. `make db-reset` wipes the local DB, then
+re-runs the migrations and the seed.
 
 ### Seed data
-`scripts/seed.py` creates `bookshop` ("Bookshop") and `vpn-saas` ("VPN SaaS"). It then uploads
-`data/seed_guidelines/bookshop.txt` and `data/seed_guidelines/vpn_saas.txt` through the service
-layer (synchronously), and each upload becomes v1 and active. **These two files must be added
-by you.** The script stops with a clear message if they are missing. Re-running the script is
-safe: existing companies are reused, and a file identical to the active version is skipped.
+`scripts/seed.py` does the following:
+1. Creates `bookshop` and `vpn-saas`.
+2. Uploads and compiles `data/seed_guidelines/bookshop.txt` and `vpn_saas.txt`. You must provide these files.
+3. Binds **mock** capabilities so the demo shows verified lookups: bookshop orders and shipments, plus VPN accounts, subscriptions and devices. Writes get policies, e.g. a refund is capped at 50.
 
-### Windows note
-If `uv run` warns that `VIRTUAL_ENV ... does not match the project environment`, an unrelated
-virtualenv is active. Run `deactivate` first, or prefix commands with `VIRTUAL_ENV=`.
+Flags:
+- `make seed-offline` (`--fake-compiler`) uses the deterministic heuristic compiler instead of the LLM compiler. It still uses real embeddings when a key is set.
+- `--no-bindings` skips the mock bindings.
+
+Re-running the script is safe.
+
+**Demo of "verified vs manual":**
+1. Ask for bookshop order `#1001` with `POST /chats`. The lookup step comes back as `performed_by: "ai_verified"`, with the real ETA from the mock store.
+2. Delete the `shipment.track` binding and ask again. The same step is now `"agent"`, a manual step for the agent.
+
+### Upgrading from v1
+Migration `0002` clears every company's active pointer, because v1 versions have no compiled
+playbook. Run `make migrate && make seed` (or re-upload your guidelines) after upgrading.
 
 ---
 
 ## Configuration
 
-`.env.example` documents every variable; the main ones are listed below. `.env` is git-ignored.
+`.env.example` documents every variable. The important ones:
 
 | Variable | Notes |
 |---|---|
-| `DATABASE_URL` | `postgresql+asyncpg://…` Local: Supabase CLI DB. Prod: hosted Supabase. |
-| `TEST_DATABASE_URL` | Separate DB for the integration tests. Its name **must end in `_test`**. |
-| `GOOGLE_API_KEY`, `LLM_MODEL`, `EMBEDDING_MODEL` | Gemini settings. Without a key the app still starts: chats return `502 LLM_ERROR` and uploads end `failed`. |
-| `VECTOR_BACKEND` | `chroma_local` (default) or `chroma_remote` |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` / `RAG_TOP_K` / `RAG_SEARCH_TYPE` | RAG tuning (`mmr` or `similarity`) |
-| `INGESTION_SYNC` | `true` ingests inline and returns 201. `false` returns 202 and ingests in the background. |
-| `AGENT_API_KEYS` / `ADMIN_API_KEYS` | Comma-separated keys. Use `label:key` to record a readable `uploaded_by` label. |
+| `DATABASE_URL` / `TEST_DATABASE_URL` | asyncpg URLs. The test DB name **must end in `_test`**. |
+| `GOOGLE_API_KEY`, `LLM_MODEL`, `COMPILER_MODEL`, `ROUTER_MODEL`, `EMBEDDING_MODEL` | Gemini. Without a key the app starts, but uploads end `failed` and chats return `502 LLM_ERROR`. |
+| `EMBEDDING_DIMENSIONS` | `768`, **fixed by the migration** (`vector(768)`). The app refuses to start if it differs. The Gemini embeddings client requests this size with `output_dimensionality`. |
+| `ROUTING_CANDIDATES` / `ROUTING_MAX_INTENTS` / `ROUTING_MIN_SCORE` | How many intents the router sees, how many it may pick, and the no-match threshold. |
+| `AUTO_APPROVE_GUIDELINES` / `AUTO_APPROVE_MIN_ROUTING_TOP1` | Whether auto-approval is on, and its eval gate (default 0.8 top-1 accuracy). |
+| `TOOLS_ENABLED`, `AGENT_MAX_STEPS`, `TOOL_TIMEOUT_SECONDS`, `AGENT_TOTAL_TIMEOUT_SECONDS` | Limits for the tool loop. |
+| `SECRETS_ENCRYPTION_KEY` | Fernet key for company secrets (MCP tokens, API keys, DSNs). |
+| `OUTBOUND_ALLOW_PRIVATE_NETWORK` | SSRF guard for HTTP/MCP URLs. `true` locally, **`false` in prod**. |
+| `LANGSMITH_TRACING` | **Off by default.** See the warning below. |
 
 ### Supabase connection pooler
-Hosted Supabase offers three connection types: a direct connection, a **session pooler (port
-5432)** and a **transaction pooler (port 6543)**. Use the direct connection or the session
-pooler for the API process.
+Use the **direct connection** or the **session pooler (port 5432)** for the API. With the
+**transaction pooler (port 6543)**, asyncpg prepared statements break under PgBouncer. In that
+case the app (and Alembic) automatically sets `statement_cache_size=0` and
+`prepared_statement_cache_size=0`, and uses `NullPool`.
 
-If `DATABASE_URL` uses port **6543**, asyncpg prepared statements break under PgBouncer
-transaction mode. The app detects this case and creates the engine with
-`statement_cache_size=0`, `prepared_statement_cache_size=0` and `NullPool`. Alembic does the
-same. It works, but you lose statement caching and app-side pooling.
+### pgvector
+Local and hosted Supabase both ship the `vector` extension, and migration `0002` runs
+`CREATE EXTENSION IF NOT EXISTS vector`. Each search runs
+`SET LOCAL hnsw.iterative_scan = relaxed_order`, so filtered HNSW scans don't return too few
+rows for small tenants. This needs **pgvector ≥ 0.8**; local Supabase ships 0.8.2, which you
+can check with `SELECT extversion FROM pg_extension WHERE extname='vector'`.
 
 ### Schema ownership: Alembic only
-Alembic (`migrations/`) is the **single source of truth** for the schema, both locally and in
-production. Do **not** add tables in `supabase/migrations/` or create them in Studio, because
-that would create two competing migration histories. `supabase/` contains only `config.toml`.
-If you ever run `supabase db reset`, re-run `alembic upgrade head` and the seed (`make db-reset`
-does both). The integration suite runs `alembic upgrade head` on a freshly created database.
-It also runs an upgrade → downgrade base → upgrade cycle, so every migration is tested.
+Alembic (`migrations/`) is the single source of truth for the schema, both locally and in
+production. Never add tables via `supabase/migrations/` or Studio. `supabase/` holds only
+`config.toml`.
+
+### LangSmith tracing (optional, off by default)
+LangGraph and LangChain can send traces to LangSmith. Setting `LANGSMITH_TRACING=true` with an
+API key **sends customer messages, guideline text and tool results to a third-party service**.
+Only enable it for debugging with non-sensitive data. Logs, Prometheus metrics and the
+`tool_calls` audit table already give you a full trace without it.
 
 ### Production
-1. Copy `.env.prod.example`. Set `DATABASE_URL` to the hosted Supabase connection string (direct connection or session pooler on port 5432), plus your secrets.
-2. Run `alembic upgrade head` against the hosted database as a release step (from CI/CD or manually) before you deploy.
-3. Deploy the image from the `Dockerfile`. Mount a persistent volume at `CHROMA_PERSIST_DIR` for as long as you use local Chroma.
+1. Copy `.env.prod.example`. Set `DATABASE_URL` (direct connection or session pooler, port 5432), `SECRETS_ENCRYPTION_KEY`, and `OUTBOUND_ALLOW_PRIVATE_NETWORK=false`.
+2. Run `alembic upgrade head` against the hosted database as a release step.
+3. Deploy the `Dockerfile` image.
 
-Production differs from local only in `DATABASE_URL` and secrets. The hosted project's Postgres
-major version should match `db.major_version` in `supabase/config.toml` (currently **17**) and
-the `postgres:17` service used in CI. Check the version in the Supabase dashboard under
-**Settings → Infrastructure** and keep all three in sync.
+The API is stateless (all state, including the vector index, is in Postgres), so you can run
+several replicas. The hosted Postgres major version should match `supabase/config.toml`
+(**17**) and the `pgvector/pgvector:pg17` image used in CI. Check it under
+**Settings → Infrastructure**.
 
 ### Docker (optional)
-`docker compose up --build` runs only the API container. The database still comes from the
-Supabase CLI on the host. Set `DATABASE_URL=postgresql+asyncpg://postgres:postgres@host.docker.internal:55422/postgres`.
-The compose file adds `extra_hosts: host.docker.internal:host-gateway` for Linux, and Chroma
-data lives in the `chroma_data` volume.
+`docker compose up --build` runs only the API. The DB comes from the Supabase CLI on the host,
+so use `DATABASE_URL=postgresql+asyncpg://postgres:postgres@host.docker.internal:55422/postgres`.
 
 ---
 
 ## How it works
 
-### Guideline versions
-- Every upload creates a new, **immutable** version (`v1`, `v2`, …) with its own Chroma collection, named `gl_{company_id.hex[:12]}_v{n}`. The raw text is kept in Postgres, so vectors can always be rebuilt.
-- **Version numbers** are allocated inside a transaction that first locks the company row (`SELECT … FOR UPDATE`). The UNIQUE(company_id, version_number) constraint acts as a backstop, with one retry on conflict.
-- **Exactly one active version.** The active version is a single pointer, `companies.active_version_id`. Activation (rollback or roll-forward) just moves the pointer, so no re-embedding is needed. With `activate=true` (the default), a newly ready version becomes active unless an even newer version is already active. That rule prevents a slow, older concurrent upload from overriding a newer one.
-- **Failed ingestion** marks the version `failed` and drops its partial collection. The previous active version keeps serving.
-- **Duplicates.** Uploading the exact content of the *active* version returns `409 DUPLICATE_GUIDELINES`. Content identical to an older inactive version is accepted, and the response includes an `info` hint suggesting you activate that version instead.
-- Ingestion (`IngestionService.run_ingestion`) has no FastAPI dependency, so it can move to a worker queue unchanged.
+### 1. Ingestion and compilation (`services/ingestion_service.py`)
+1. **Validate the upload.** The parser registry accepts only `.txt` and returns `UNSUPPORTED_FORMAT` for anything else; PDF/DOCX plug in here later. The size limit, UTF-8/Latin-1 decoding and the duplicate-of-active check (`409`) are unchanged from v1.
+2. **Allocate the version.** Version numbers are allocated under `SELECT … FOR UPDATE` on the company row, with a UNIQUE constraint as a backstop.
+3. **Parse** the text into sections (`S1`, `S2`, …) with headings and character offsets.
+4. **Compile** with `COMPILER_MODEL`, which produces:
+   - intents, each with typed steps (`say`/`ask`/`lookup`/`action`/`escalate`) and a capability mapping for lookups and actions;
+   - company rules;
+   - reference facts;
+   - a section → kind map.
 
-### Chunking
-`RecursiveCharacterTextSplitter` is configured to split before markdown, numbered and ALL-CAPS
-headings first, then at blank lines, lines, sentences and words. Each chunk gets:
-- the nearest heading as its `section`
-- a deterministic id, `{version_id}:{chunk_index:04d}`, so re-ingesting a version upserts the same chunks and doesn't duplicate them
+   The compiler receives the previous version's intent keys and reuses them, so keys stay stable across versions. Large documents are compiled section by section and merged.
+5. **Validate** in code. Blocking errors (no intents, duplicate keys, no source section) fail the version. Fixable problems become warnings, and coverage is recorded.
+6. **Generate synthetic customer messages** per intent: index examples for routing, plus held-out eval examples and negatives.
+7. **Embed** everything, then insert all rows **in one transaction**. A failure leaves no partial rows, and the previous active version keeps serving.
+8. **Run a retrieval-mode routing eval** (no LLM). This gates auto-approval: with the eval passing and auto-approval on, the version is approved and becomes active. Otherwise it waits as `pending` for an admin.
 
-### Chats
-1. Resolve the company and its active version. This uses a 30s in-process cache, which is invalidated on upload, activation and deletion.
-2. Retrieve the top-k chunks from that version's collection, using the **embedding model recorded on the version**. MMR is computed locally, so every chunk keeps a cosine score.
-3. Run `prompt | llm.with_structured_output(GuidanceOutput, include_raw=True)` and read token usage from the raw `AIMessage`.
-4. **Persist every attempt**, including failures, with latencies (total, retrieval, LLM), tokens, model, prompt version, retrieved chunks and request id.
+### 2. The chat harness (`harness/`, LangGraph)
+```
+load_context → [route ∥ retrieve_facts] → (no match? fallback_sections) → prefetch
+            → tool_agent ⟲ tools (bounded) → generate → validate_and_gate → persist
+```
+- **route:** hybrid search over the intent examples (vector cosine + an OR full-text query, fused with RRF, best example per intent), then the router LLM picks 0–3 intents and extracts entities such as order id and email.
+- **Company rules are always injected.** Reference facts are retrieved in parallel.
+- **No match:** the harness falls back to section search, forces `confidence="low"` and escalation, and flags the chat.
+- **prefetch:** runs lookups deterministically when the needed arguments are already known. **tool_agent:** offers the LLM only the *bound read* capabilities of the selected intents, limited by `AGENT_MAX_STEPS` and the timeouts.
+- **validate_and_gate:**
+  - strips citations that weren't in the context;
+  - decides `performed_by` per step **in code** (`ai` / `ai_verified` / `needs_approval` / `agent`);
+  - checks proposed writes against the capability schema and the binding's **policy** (`proposed` or `denied`).
+- **persist:** **always** runs, on success or error. It stores the chat, the routing trace, tool calls and proposals. An LLM failure returns `502 LLM_ERROR`, and the row is still saved.
 
-Guideline references are filtered to chunk ids that were actually retrieved, so citations can't be hallucinated.
+### 3. Company integrations (`capabilities/`)
+Playbook steps refer to **abstract capabilities** (`order.get`, `refund.create`, …; see
+`GET /capabilities`). Each company binds a capability to an adapter:
 
-The prompt (`app/ai/prompts.py`, `PROMPT_VERSION = "v1"`) does the following:
-- Treats the customer message, the agent notes and the guideline text as **data, not instructions**.
-- Forbids inventing policies.
-- Requires `confidence="low"` plus escalation or `missing_information` when the guidelines don't cover the case.
+| Adapter | Config | Notes |
+|---|---|---|
+| `mock` | `{"store": "bookshop_orders"\|"vpn_accounts"}` | Demo and tests; writes are idempotent |
+| `http` | `{"method","url","headers","query","body","auth_secret","response_path"}` | `{arg}` templates; secret injected at call time; SSRF guard |
+| `sql_readonly` | `{"dsn_secret","statement"}` | One admin-defined parameterized `SELECT` (validated); runs in a `READ ONLY` transaction with `statement_timeout` and a row limit |
+| `mcp` | `{"server_id","tool_name","arg_map"}` | Only the mapped tool is ever callable |
+
+Rules:
+- **Binding lifecycle:** `PUT` creates a `draft` → `test` (a dry run; writes are only validated unless `execute_write=true`) → `tested` → `go-live` → `live`. Any change resets the binding to `draft`.
+- **Reads** run automatically. **Writes** become proposed actions. The agent approves one with `POST /chats/{id}/actions/{aid}/approve`, which locks the row, re-checks the policy, and executes it **once** with an idempotency key. Approving again returns the stored result.
+- **Graceful degradation:** a capability that is unbound, failing or timing out becomes a manual step for the agent, and the chat never fails because of it.
+- Secrets are Fernet-encrypted, write-only through the API, and redacted from `tool_calls` and logs. Every call is audited in `tool_calls`.
+
+### 4. Routing evals (`services/eval_service.py`)
+- **Case sources:** synthetic held-out examples, negatives, manual cases, and **agent feedback** (`POST /chats/{id}/feedback`).
+- **Modes:** `retrieval` (search only, deterministic; runs at every ingest) and `full` (adds the router LLM).
+- **Metrics:** top-1 accuracy, candidate recall@k, multi-intent set precision/recall/F1 and exact match, no-match precision/recall, per-intent accuracy, and the most-confused intent pairs. Stale cases (whose key no longer exists) are reported separately.
 
 ### Observability
-- **JSON logs.** Every line carries `request_id`. Each request also gets one access line with `path`, `method`, `status` and `duration_ms`.
-- **Request ids.** `X-Request-ID` is accepted on the way in, or generated, and always returned.
-- **Domain events:** `chat.completed`, `chat.failed`, `ingestion.started`, `ingestion.completed`, `ingestion.failed`, `guidelines.activated`.
-- **No message content in logs.** Customer messages are logged only as length plus a short hash, and API keys are never logged.
-- **Prometheus** (`/metrics`, admin only): HTTP metrics plus `chat_requests_total{company,status}`, `chat_latency_seconds`, `llm_tokens_total{direction}` and `ingestion_total{status}`.
-- **Metrics summary** (`/api/v1/internal/metrics/summary`) is computed in Postgres: `percentile_cont` for p50/p95, `date_trunc` for daily volume, and JSONB for escalation and confidence. The `/api/v1/internal/dashboard` page renders it with Chart.js.
+- **Logs:** JSON logs with `request_id`, and the `X-Request-ID` header is propagated. Customer messages are only logged as length plus hash.
+- **Events:** `chat.*`, `routing.completed`, `tool.called`, `action.*`, `ingestion.*`, `guidelines.*`, `eval.completed`.
+- **Prometheus** (`/metrics`, admin only):
+  - `chat_requests_total{company,status}`
+  - `chat_latency_seconds`
+  - `llm_tokens_total{role,direction}`
+  - `ingestion_total{status}`
+  - `ingestion_compile_seconds`
+  - `routing_no_match_total{company}`
+  - `routing_intents_selected`
+  - `tool_calls_total{capability,adapter,status}`
+  - `tool_latency_seconds`
+  - `proposed_actions_total{status}`
+- **Metrics summary and dashboard:** `/internal/metrics/summary` is computed in SQL and includes `routing` and `tools` blocks. `/internal/dashboard` renders it with Chart.js.
+
+### Swapping the vector search
+Only `app/search/` and `repositories/search.py` know about pgvector. To use a dedicated vector
+database, implement `SearchGateway` (`search_intents`, `search_facts`, `search_sections`,
+`healthcheck`) and build it in `app/resources.py`. Services and graph nodes don't change.
 
 ---
 
-## API (all under `/api/v1`; auth header `X-API-Key`)
+## API (all under `/api/v1`; header `X-API-Key`)
 
-**Agent** keys can create chats and read companies and guidelines. **Admin** keys can do
-everything. The health endpoints are public. Every error has the shape
+**Agent** keys: chats, actions, feedback, and reading companies, guidelines and playbooks.
+**Admin** keys: everything. Health endpoints are public. Errors look like
 `{"error": {"code", "message", "request_id"}}`.
 
 ```bash
-API=http://127.0.0.1:8000
-AGENT="X-API-Key: <agent-key>"
-ADMIN="X-API-Key: <admin-key>"
+API=http://127.0.0.1:8000/api/v1
+AGENT="X-API-Key: <agent-key>"; ADMIN="X-API-Key: <admin-key>"; JSON='Content-Type: application/json'
 
 # Health
-curl $API/api/v1/health
-curl $API/api/v1/ready                       # DB SELECT 1 + vector store heartbeat
+curl $API/health
+curl $API/ready                                   # DB + pgvector search index
 
 # Companies
-curl -X POST $API/api/v1/companies -H "$ADMIN" -H 'Content-Type: application/json' \
-     -d '{"slug":"bookshop","name":"Bookshop","description":"Online bookshop"}'
-curl $API/api/v1/companies -H "$AGENT"
-curl $API/api/v1/companies/bookshop -H "$AGENT"
+curl -X POST $API/companies -H "$ADMIN" -H "$JSON" -d '{"slug":"bookshop","name":"Bookshop"}'
+curl $API/companies -H "$AGENT"
+curl $API/companies/bookshop -H "$AGENT"
 
-# Guideline versions
-curl -X POST $API/api/v1/companies/bookshop/guidelines -H "$ADMIN" \
+# Guideline versions, playbooks, review
+curl -X POST $API/companies/bookshop/guidelines -H "$ADMIN" \
      -F file=@data/seed_guidelines/bookshop.txt -F activate=true -F notes="refund policy updated"
-curl $API/api/v1/companies/bookshop/guidelines -H "$AGENT"                 # newest first, is_active flag
-curl $API/api/v1/companies/bookshop/guidelines/active -H "$AGENT"
-curl "$API/api/v1/companies/bookshop/guidelines/2?include_text=true" -H "$AGENT"
-curl -X POST $API/api/v1/companies/bookshop/guidelines/1/activate -H "$ADMIN"   # rollback
-curl -X DELETE $API/api/v1/companies/bookshop/guidelines/3 -H "$ADMIN"          # not the active one
+curl $API/companies/bookshop/guidelines -H "$AGENT"
+curl $API/companies/bookshop/guidelines/active -H "$AGENT"
+curl "$API/companies/bookshop/guidelines/2?include_text=true" -H "$AGENT"
+curl $API/companies/bookshop/guidelines/2/playbook -H "$AGENT"            # intents, rules, facts
+curl $API/companies/bookshop/guidelines/2/capability-coverage -H "$ADMIN" # live vs manual
+curl -X POST $API/companies/bookshop/guidelines/2/approve -H "$ADMIN" -H "$JSON" -d '{"note":"ok"}'
+curl -X POST $API/companies/bookshop/guidelines/3/reject -H "$ADMIN" -H "$JSON" -d '{"reason":"typo"}'
+curl -X POST $API/companies/bookshop/guidelines/1/activate -H "$ADMIN"    # rollback
+curl -X DELETE $API/companies/bookshop/guidelines/3 -H "$ADMIN"
 
 # Chats
-curl -X POST $API/api/v1/chats -H "$AGENT" -H 'Content-Type: application/json' -d '{
+curl -X POST $API/chats -H "$AGENT" -H "$JSON" -d '{
   "company": "vpn-saas",
   "customer_message": "I was charged twice this month and the VPN will not connect on my iPhone.",
-  "agent_notes": "Customer is on annual plan",
-  "channel": "email"}'
-curl "$API/api/v1/chats?company=vpn-saas&status=success&from=2026-11-01T00:00:00%2B01:00&limit=20" -H "$AGENT"
-curl "$API/api/v1/chats?cursor=<next_cursor>" -H "$AGENT"
-curl $API/api/v1/chats/<chat_id> -H "$AGENT"
+  "agent_notes": "Customer email: jane@example.com", "channel": "email"}'
+curl "$API/chats?company=vpn-saas&status=success&intent=billing_and_subscription_issues&limit=20" -H "$AGENT"
+curl "$API/chats?cursor=<next_cursor>" -H "$AGENT"
+curl $API/chats/<chat_id> -H "$AGENT"                 # routing trace, tool calls, actions
+curl -X POST $API/chats/<chat_id>/feedback -H "$AGENT" -H "$JSON" \
+     -d '{"correct_intent_keys":["billing_and_subscription_issues","connection_failures"]}'
 
-# Internal (admin)
-curl "$API/api/v1/internal/metrics/summary?from=2026-11-01T00:00:00Z&to=2026-11-10T00:00:00Z&company=bookshop" -H "$ADMIN"
-open "$API/api/v1/internal/dashboard?key=<admin-key>"    # or send the X-API-Key header
-curl $API/metrics -H "$ADMIN"
+# Proposed actions (agent approves; executes exactly once)
+curl $API/chats/<chat_id>/actions -H "$AGENT"
+curl -X POST $API/chats/<chat_id>/actions/<action_id>/approve -H "$AGENT"
+curl -X POST $API/chats/<chat_id>/actions/<action_id>/reject -H "$AGENT" -H "$JSON" -d '{"reason":"store credit"}'
+
+# Integrations (admin)
+curl $API/capabilities -H "$ADMIN"
+curl -X POST $API/companies/bookshop/secrets -H "$ADMIN" -H "$JSON" -d '{"name":"orders_api","value":"sk-…"}'
+curl $API/companies/bookshop/secrets -H "$ADMIN"                       # names only
+curl -X DELETE $API/companies/bookshop/secrets/orders_api -H "$ADMIN"
+#   HTTP API binding
+curl -X PUT $API/companies/bookshop/capability-bindings/order.get -H "$ADMIN" -H "$JSON" -d '{
+  "adapter_type":"http",
+  "config":{"method":"GET","url":"https://api.bookshop.example/orders/{order_id}",
+            "auth_secret":"orders_api","response_path":"data"},"policy":{}}'
+#   Read-only SQL binding (DSN stored as a secret)
+curl -X PUT $API/companies/bookshop/capability-bindings/shipment.track -H "$ADMIN" -H "$JSON" -d '{
+  "adapter_type":"sql_readonly",
+  "config":{"dsn_secret":"orders_db","statement":"SELECT status, eta FROM shipments WHERE order_id = :order_id"}}'
+#   MCP server binding
+curl -X POST $API/companies/bookshop/mcp-servers -H "$ADMIN" -H "$JSON" \
+     -d '{"name":"orders","url":"https://mcp.bookshop.example/mcp","auth_secret_name":"mcp_token"}'
+curl $API/companies/bookshop/mcp-servers -H "$ADMIN"
+curl -X PATCH $API/companies/bookshop/mcp-servers/<server_id> -H "$ADMIN" -H "$JSON" -d '{"url":"https://…"}'
+curl -X POST $API/companies/bookshop/mcp-servers/<server_id>/discover -H "$ADMIN"
+curl -X PUT $API/companies/bookshop/capability-bindings/order.get -H "$ADMIN" -H "$JSON" -d '{
+  "adapter_type":"mcp","config":{"server_id":"<server_id>","tool_name":"lookup_order","arg_map":{"order_id":"id"}}}'
+#   Lifecycle: test (dry run) -> go-live; writes take a policy
+curl -X POST $API/companies/bookshop/capability-bindings/order.get/test -H "$ADMIN" -H "$JSON" \
+     -d '{"sample_args":{"order_id":"1001"}}'
+curl -X POST $API/companies/bookshop/capability-bindings/order.get/go-live -H "$ADMIN"
+curl -X PUT $API/companies/bookshop/capability-bindings/refund.create -H "$ADMIN" -H "$JSON" \
+     -d '{"adapter_type":"mock","config":{"store":"bookshop_orders"},"policy":{"max_amount":50}}'
+curl $API/companies/bookshop/capability-bindings -H "$ADMIN"
+curl $API/companies/bookshop/capability-bindings/order.get -H "$ADMIN"
+curl -X DELETE $API/companies/bookshop/capability-bindings/order.get -H "$ADMIN"
+curl -X DELETE $API/companies/bookshop/mcp-servers/<server_id> -H "$ADMIN"
+
+# Routing evals (admin)
+curl $API/companies/bookshop/eval-cases -H "$ADMIN"
+curl -X POST $API/companies/bookshop/eval-cases -H "$ADMIN" -H "$JSON" \
+     -d '{"message":"my parcel never arrived","expected_intent_keys":["shipping_delays"]}'
+curl -X POST $API/internal/evals/routing -H "$ADMIN" -H "$JSON" -d '{"company":"bookshop","mode":"full"}'
+curl "$API/internal/evals/routing/runs?company=bookshop" -H "$ADMIN"
+curl $API/internal/evals/routing/runs/<run_id> -H "$ADMIN"
+
+# Metrics (admin)
+curl "$API/internal/metrics/summary?from=2026-11-01T00:00:00Z&company=bookshop" -H "$ADMIN"
+open "$API/internal/dashboard?key=<admin-key>"
+curl http://127.0.0.1:8000/metrics -H "$ADMIN"
 ```
 
-Error codes: `COMPANY_NOT_FOUND`, `COMPANY_EXISTS`, `VERSION_NOT_FOUND`, `NO_ACTIVE_GUIDELINES`,
-`VERSION_NOT_READY`, `VERSION_IS_ACTIVE`, `DUPLICATE_GUIDELINES`, `INVALID_FILE`,
-`FILE_TOO_LARGE`, `CHAT_NOT_FOUND`, `UNAUTHORIZED`, `FORBIDDEN`, `LLM_ERROR`,
-`RETRIEVAL_ERROR`, `VALIDATION_ERROR`, `INTERNAL_ERROR`.
-
----
-
-## Switching to Chroma Cloud or a remote Chroma server
-
-Only configuration changes. Nothing outside `app/vectorstore/` imports `chromadb`.
-
-```env
-VECTOR_BACKEND=chroma_remote
-# Chroma Cloud:
-CHROMA_API_KEY=...
-CHROMA_TENANT=...
-CHROMA_DATABASE=...
-# or a self-hosted server:
-CHROMA_HOST=chroma.internal
-CHROMA_PORT=8000
-CHROMA_API_KEY=...        # optional token auth
-```
-
-Existing local collections are not migrated automatically. To move them, re-run ingestion
-for the versions you need: the raw text is in Postgres and chunk ids are deterministic. With a
-remote store the API becomes fully stateless and can scale horizontally.
+Error codes:
+- **Companies and guidelines:** `COMPANY_NOT_FOUND`, `COMPANY_EXISTS`, `VERSION_NOT_FOUND`, `NO_ACTIVE_GUIDELINES`, `VERSION_NOT_READY`, `VERSION_NOT_APPROVED`, `VERSION_IS_ACTIVE`, `DUPLICATE_GUIDELINES`
+- **Uploads:** `INVALID_FILE`, `UNSUPPORTED_FORMAT`, `FILE_TOO_LARGE`, `COMPILE_ERROR`
+- **Integrations and actions:** `CAPABILITY_NOT_BOUND`, `BINDING_NOT_TESTED`, `POLICY_VIOLATION`, `ACTION_NOT_PENDING`, `TOOL_ERROR`
+- **Chats:** `CHAT_NOT_FOUND`
+- **Auth:** `UNAUTHORIZED`, `FORBIDDEN`
+- **Upstream failures:** `LLM_ERROR`, `RETRIEVAL_ERROR`
+- **General:** `NOT_FOUND`, `CONFLICT`, `VALIDATION_ERROR`, `INTERNAL_ERROR`
 
 ---
 
@@ -216,29 +309,42 @@ remote store the API becomes fully stateless and can scale horizontally.
 
 | Command | What it runs |
 |---|---|
-| `make test-unit` | `pytest -m unit`: about 60 fast tests, no Docker or Postgres. Only the company-repository CRUD test uses in-memory SQLite. |
-| `make test-integration` | `pytest -m integration`: the real app against real Postgres (`TEST_DATABASE_URL`). |
-| `make test` | Both tiers. Plain `pytest` does the same and skips the integration tier with a hint if Postgres is unreachable. |
-| `make test-live` | Opt-in smoke test with real Gemini (needs `GOOGLE_API_KEY` and `bookshop.txt`). |
+| `make test-unit` | `pytest -m unit`: about 130 fast tests (under 10 s), with no Docker or Postgres. Only U8 uses in-memory SQLite. |
+| `make test-integration` | `pytest -m integration`: the real app against real Postgres + pgvector (`TEST_DATABASE_URL`). |
+| `make test` | Both tiers. Plain `pytest` skips the integration tier with a hint if Postgres is unreachable. |
+| `make test-live` | Opt-in: real Gemini compiler, router, generator and embeddings (needs `GOOGLE_API_KEY` and `bookshop.txt`). |
+| `make eval` | Routing evals for the seed companies' active versions. |
 
-How the tiers work:
-- No test needs a Gemini key: they use `DeterministicFakeEmbedding` and a fake generator that implements the same interface as the real chain.
-- At session start, the integration harness **drops and recreates** the test database and runs `alembic upgrade head`. Between tests it runs `TRUNCATE … RESTART IDENTITY CASCADE`.
-- The harness refuses to run unless the database name ends in `_test` and differs from `DATABASE_URL`.
+No test needs a Gemini key. They use:
+- `DeterministicFakeEmbedding(size=768)`;
+- the heuristic compiler, example generator and router (`app/ai/heuristic.py`);
+- a fake generator that builds output from the context;
+- a scripted tool-calling model;
+- mock adapters;
+- an **in-process MCP server** (`MCPServer` from the `mcp` SDK).
+
+The integration harness drops and recreates the test database, runs `alembic upgrade head`, and
+truncates every table between tests. It refuses to run against a database whose name doesn't
+end in `_test`.
 
 CI (`.github/workflows/ci.yml`) has two jobs:
 1. ruff, `ruff format --check`, mypy and the unit tier.
-2. The integration tier against a `postgres:17` service container. A plain Postgres image is fine because Alembic owns the schema and the app uses only standard Postgres features.
-
-Lint and type checks: `make lint`, `make typecheck`.
+2. The integration tier against a **`pgvector/pgvector:pg17`** service container, the same major version as Supabase.
 
 ---
 
 ## Future work (out of scope)
 
-- Multi-turn conversation threads, user accounts/SSO and per-company RBAC.
-- A real queue worker for ingestion (Arq/Celery). The ingestion function is already queue-ready.
-- Re-ranking with a cross-encoder, and hybrid keyword + vector search.
-- An evaluation harness for answer quality.
-- PDF/DOCX guideline formats and streaming responses.
-- Rebuilding collections automatically when switching vector backends or embedding models.
+- Multi-turn threads, SSO and per-company RBAC.
+- A queue worker for ingestion and action execution. Both functions are already queue-ready.
+- Multilingual messages.
+- PDF/DOCX/OCR parsers (the interface exists).
+- Native OAuth connectors (Shopify, Stripe, Zendesk…) and OpenAPI import (the adapter interface allows them).
+- KMS/Vault secret store.
+- Per-company tool rate limits.
+- Recompiling an existing version.
+- Cross-encoder re-ranking.
+- LLM-judge evals of reply quality.
+- Partitioning playbook tables by company.
+- Streaming responses.
+- LangGraph checkpointing (human-in-the-loop resume).

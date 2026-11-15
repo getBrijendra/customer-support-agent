@@ -11,7 +11,7 @@ from tests.integration.conftest import create_company
 async def test_ready_returns_200_against_postgres(client: httpx.AsyncClient) -> None:
     r = await client.get("/api/v1/ready")
     assert r.status_code == 200, r.text
-    assert r.json() == {"status": "ok", "checks": {"database": True, "vector_store": True}}
+    assert r.json() == {"status": "ok", "checks": {"database": True, "search_index": True}}
 
 
 async def test_create_list_get_company(client: httpx.AsyncClient) -> None:

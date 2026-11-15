@@ -5,15 +5,9 @@ services:
   api:
     build: .
     env_file: .env
-    environment:
-      CHROMA_PERSIST_DIR: /data/chroma
     ports:
       - "8000:8000"
-    volumes:
-      - chroma_data:/data/chroma
     extra_hosts:
       - "host.docker.internal:host-gateway"  # needed on Linux
     restart: unless-stopped
-
-volumes:
-  chroma_data:
+# No volumes: all state (including the pgvector index) lives in Postgres.

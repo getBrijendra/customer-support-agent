@@ -14,6 +14,7 @@ from app.db.models import Chat, Company
 class ChatFilters:
     company_id: uuid.UUID | None = None
     status: str | None = None
+    intent: str | None = None
     created_from: datetime | None = None
     created_to: datetime | None = None
 
@@ -32,6 +33,9 @@ class ChatRepository:
         self.session.add(chat)
         await self.session.flush()
         return chat
+
+    async def get_for_company(self, chat_id: uuid.UUID) -> Chat | None:
+        return await self.session.get(Chat, chat_id)
 
     async def get(self, chat_id: uuid.UUID) -> ChatRow | None:
         stmt = (
@@ -55,6 +59,8 @@ class ChatRepository:
             stmt = stmt.where(Chat.company_id == filters.company_id)
         if filters.status is not None:
             stmt = stmt.where(Chat.status == filters.status)
+        if filters.intent is not None:
+            stmt = stmt.where(Chat.primary_intent == filters.intent)
         if filters.created_from is not None:
             stmt = stmt.where(Chat.created_at >= filters.created_from)
         if filters.created_to is not None:

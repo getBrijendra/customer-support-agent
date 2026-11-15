@@ -26,12 +26,13 @@ jobs:
       - run: uv run pytest -m unit
 
   integration:
-    name: Integration tests (Postgres)
+    name: Integration tests (Postgres + pgvector)
     runs-on: ubuntu-latest
     services:
       postgres:
-        # Same major version as the Supabase project (supabase/config.toml: db.major_version = 17).
-        image: postgres:17
+        # Same major version as the Supabase project (supabase/config.toml: db.major_version = 17),
+        # with the pgvector extension (>= 0.8 for iterative HNSW scans).
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

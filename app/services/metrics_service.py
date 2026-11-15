@@ -47,4 +47,13 @@ class MetricsService:
                 "by_company": await repo.by_company(start, end, company_id),
                 "daily_volume": await repo.daily_volume(start, end, company_id),
                 "ingestion": await repo.ingestion(start, end, company_id),
+                "routing": {
+                    **await repo.routing(start, end, company_id),
+                    "latest_eval": [
+                        r
+                        for r in await uow.evals.latest_per_company()
+                        if company is None or r["company"] == company
+                    ],
+                },
+                "tools": await repo.tools(start, end, company_id),
             }

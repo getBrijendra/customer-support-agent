@@ -4,10 +4,10 @@ SUPABASE ?= $(shell command -v supabase >/dev/null 2>&1 && echo supabase || echo
 UV ?= uv
 RUN = $(UV) run
 
-.PHONY: help install db-up db-down db-reset db-status migrate seed run test-unit test-integration test test-live lint format typecheck check
+.PHONY: help install db-up db-down db-reset db-status migrate seed seed-offline eval run test-unit test-integration test test-live lint format typecheck check
 
 help:
-	@echo "install | db-up | db-down | db-reset | db-status | migrate | seed | run"
+	@echo "install | db-up | db-down | db-reset | db-status | migrate | seed | seed-offline | eval | run"
 	@echo "test-unit | test-integration | test | test-live | lint | format | typecheck | check"
 
 install:
@@ -32,8 +32,14 @@ db-reset:       ## wipe local DB, re-apply Alembic schema, re-seed
 migrate:
 	$(RUN) alembic upgrade head
 
-seed:
+seed:          ## compile + seed both companies (real Gemini) and bind mock capabilities
 	$(RUN) python scripts/seed.py
+
+seed-offline:  ## same, with the heuristic compiler (no LLM calls for compilation)
+	$(RUN) python scripts/seed.py --fake-compiler
+
+eval:          ## routing evals for the seed companies' active versions
+	$(RUN) python scripts/run_evals.py
 
 run:
 	$(RUN) uvicorn app.main:app --reload

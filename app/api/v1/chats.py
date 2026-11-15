@@ -2,23 +2,25 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.ai.schemas import GuidanceOutput
-from app.api.deps import chat_history_service, get_request_id, guidance_service
+from app.api.deps import chat_history_service, eval_service, get_request_id, guidance_service
 from app.core.security import Principal, require_agent
 from app.schemas.api import (
     SLUG_PATTERN,
+    ActionOut,
     ChatCreate,
     ChatCreated,
     ChatDetail,
     ChatList,
     ChatListItem,
     ErrorResponse,
+    FeedbackIn,
 )
 from app.services.chat_history_service import ChatHistoryService
+from app.services.eval_service import EvalService
 from app.services.guidance_service import ChatRequestData, GuidanceService
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -29,8 +31,12 @@ router = APIRouter(prefix="/chats", tags=["chats"])
     response_model=ChatCreated,
     status_code=status.HTTP_201_CREATED,
     summary="Generate guidance for a customer message",
-    description="Retrieves from the company's ACTIVE guideline version and returns structured "
-    "guidance. Every attempt (success or failure) is stored.",
+    description=(
+        "Routes the message to the company's playbook intents (several when needed), always "
+        "applies company rules, retrieves reference facts, runs read-only lookups against bound "
+        "company systems, and returns structured guidance plus proposed actions (writes) for the "
+        "agent to approve. Every attempt (success or failure) is stored."
+    ),
     responses={
         404: {"model": ErrorResponse},
         409: {"model": ErrorResponse, "description": "NO_ACTIVE_GUIDELINES"},
@@ -57,7 +63,8 @@ async def create_chat(
         chat_id=chat.id,
         company=outcome.company_slug,
         guideline_version=outcome.guideline_version,
-        guidance=GuidanceOutput.model_validate(chat.guidance),
+        guidance=outcome.guidance,
+        proposed_actions=[ActionOut.build(a) for a in outcome.actions],
         latency_ms=chat.latency_ms_total,
         created_at=chat.created_at,
     )
@@ -67,6 +74,7 @@ async def create_chat(
 async def list_chats(
     company: str | None = Query(None, pattern=SLUG_PATTERN),
     status_: Literal["success", "error"] | None = Query(None, alias="status"),
+    intent: str | None = Query(None, max_length=80, description="Primary intent key"),
     from_: datetime | None = Query(None, alias="from", description="ISO-8601, inclusive"),
     to: datetime | None = Query(None, description="ISO-8601, exclusive"),
     limit: int = Query(20, ge=1, le=100),
@@ -77,6 +85,7 @@ async def list_chats(
     rows, next_cursor = await service.list(
         company=company,
         status=status_,
+        intent=intent,
         created_from=from_,
         created_to=to,
         limit=limit,
@@ -90,7 +99,7 @@ async def list_chats(
 @router.get(
     "/{chat_id}",
     response_model=ChatDetail,
-    summary="Full chat exchange",
+    summary="Full chat exchange incl. routing trace, tool calls and proposed actions",
     responses={404: {"model": ErrorResponse}},
 )
 async def get_chat(
@@ -98,5 +107,19 @@ async def get_chat(
     _: Principal = Depends(require_agent),
     service: ChatHistoryService = Depends(chat_history_service),
 ) -> ChatDetail:
-    row = await service.get(chat_id)
-    return ChatDetail.build(row.chat, row.company_slug)
+    d = await service.get(chat_id)
+    return ChatDetail.build(d.row.chat, d.row.company_slug, d.tool_calls, d.actions)
+
+
+@router.post(
+    "/{chat_id}/feedback",
+    summary="Correct the routed intents; becomes a routing eval case",
+    responses={404: {"model": ErrorResponse}},
+)
+async def chat_feedback(
+    chat_id: uuid.UUID,
+    body: FeedbackIn,
+    principal: Principal = Depends(require_agent),
+    service: EvalService = Depends(eval_service),
+) -> dict[str, Any]:
+    return await service.add_feedback(chat_id, body.correct_intent_keys, principal.label)

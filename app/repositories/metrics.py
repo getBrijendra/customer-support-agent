@@ -9,7 +9,15 @@ from typing import Any
 from sqlalchemy import Boolean, Float, and_, case, cast, extract, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chat, ChatStatus, Company, GuidelineVersion, VersionStatus
+from app.db.models import (
+    Chat,
+    ChatStatus,
+    Company,
+    GuidelineVersion,
+    ProposedAction,
+    ToolCall,
+    VersionStatus,
+)
 
 
 def _r(value: Any) -> float | None:
@@ -132,4 +140,84 @@ class MetricsRepository:
             "ready": int(r.ready),
             "failed": int(r.failed),
             "avg_duration_ms": None if r.avg_ms is None else round(float(r.avg_ms)),
+        }
+
+    async def routing(
+        self, start: datetime, end: datetime, company_id: uuid.UUID | None
+    ) -> dict[str, Any]:
+        window = self._chat_window(start, end, company_id)
+        ok = Chat.status == ChatStatus.SUCCESS
+        no_match = cast(Chat.routing.op("->>")("no_match"), Boolean)
+        n_intents = func.jsonb_array_length(Chat.guidance.op("->")("detected_intents"))
+        stmt = select(
+            func.count().filter(ok).label("success"),
+            func.count().filter(and_(ok, no_match.is_(True))).label("no_match"),
+            func.count().filter(and_(ok, n_intents > 1)).label("multi"),
+            func.count().label("total"),
+            func.count().filter(Chat.feedback.is_not(None)).label("feedback"),
+            func.count()
+            .filter(cast(Chat.feedback.op("->>")("changed"), Boolean).is_(True))
+            .label("corrected"),
+        ).where(window)
+        r = (await self.session.execute(stmt)).one()
+        top_stmt = (
+            select(Chat.primary_intent, func.count().label("n"))
+            .where(window, ok, Chat.primary_intent.is_not(None))
+            .group_by(Chat.primary_intent)
+            .order_by(func.count().desc(), Chat.primary_intent)
+            .limit(10)
+        )
+        top = [
+            {"intent": row[0], "chats": int(row[1])}
+            for row in (await self.session.execute(top_stmt)).all()
+        ]
+        success = int(r.success)
+        return {
+            "no_match_rate": round(r.no_match / success, 4) if success else 0.0,
+            "multi_intent_rate": round(r.multi / success, 4) if success else 0.0,
+            "top_intents": top,
+            "feedback_count": int(r.feedback),
+            "feedback_correction_rate": round(r.corrected / r.feedback, 4) if r.feedback else 0.0,
+        }
+
+    async def tools(
+        self, start: datetime, end: datetime, company_id: uuid.UUID | None
+    ) -> dict[str, Any]:
+        cond = and_(ToolCall.created_at >= start, ToolCall.created_at < end)
+        if company_id is not None:
+            cond = and_(cond, ToolCall.company_id == company_id)
+        by_cap = (
+            select(ToolCall.capability, ToolCall.status, func.count())
+            .where(cond)
+            .group_by(ToolCall.capability, ToolCall.status)
+            .order_by(ToolCall.capability, ToolCall.status)
+        )
+        calls: dict[str, dict[str, Any]] = {}
+        for cap, status, n in (await self.session.execute(by_cap)).all():
+            calls.setdefault(cap, {"capability": cap})[status] = int(n)
+        agg = select(
+            func.percentile_cont(0.95).within_group(ToolCall.latency_ms).label("p95"),
+            func.count().filter(ToolCall.trigger == "prefetch").label("prefetch"),
+            func.count().filter(ToolCall.trigger.in_(["prefetch", "agent"])).label("reads"),
+        ).where(cond)
+        a = (await self.session.execute(agg)).one()
+
+        pcond = and_(ProposedAction.created_at >= start, ProposedAction.created_at < end)
+        if company_id is not None:
+            pcond = and_(pcond, ProposedAction.company_id == company_id)
+        props = {
+            str(status): int(n)
+            for status, n in (
+                await self.session.execute(
+                    select(ProposedAction.status, func.count())
+                    .where(pcond)
+                    .group_by(ProposedAction.status)
+                )
+            ).all()
+        }
+        return {
+            "calls": list(calls.values()),
+            "p95_latency_ms": _r(a.p95),
+            "prefetch_share": round(a.prefetch / a.reads, 4) if a.reads else 0.0,
+            "proposals": props,
         }

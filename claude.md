@@ -25,7 +25,7 @@ Actions:    agent approves a proposed action → policy re-check → execute onc
 | LLM + embeddings provider | **Google Gemini** via `ChatGoogleGenerativeAI` and `GoogleGenerativeAIEmbeddings`. Three chat roles: **generator** (`LLM_MODEL`, a current "pro" model), **compiler** (`COMPILER_MODEL`, a "pro" model), **router** (`ROUTER_MODEL`, a cheap/fast model). Plus `EMBEDDING_MODEL`. Names come from env vars, never hard-coded. Check the current Gemini model list for defaults in `.env.example`. |
 | Relational DB | **Supabase Postgres** in every environment that runs the app: **local Supabase via the Supabase CLI** for development and integration tests, hosted Supabase for production. **SQLAlchemy 2.0 async + asyncpg**, schema owned by **Alembic** |
 | Vector search | **pgvector in the same Postgres** (`pgvector` Python package, SQLAlchemy `Vector` type). Hybrid search = pgvector cosine + Postgres full-text (`tsvector`), fused with Reciprocal Rank Fusion. Behind a `SearchGateway` interface so a dedicated vector DB can replace it later. **No Chroma.** |
-| MCP client | `langchain-mcp-adapters` + the official `mcp` SDK, streamable HTTP transport |
+| MCP client | the official `mcp` SDK (`mcp.Client`), streamable HTTP transport. Tool schemas exposed to the model come from the capability registry, not from the MCP server, so `langchain-mcp-adapters` isn't needed. |
 | Secrets for company integrations | `cryptography` (Fernet) behind a `SecretStore` interface (KMS/Vault later) |
 | Tracing | LangSmith tracing is **off by default**; opt-in via `LANGSMITH_TRACING`. The README must warn that enabling it sends customer messages and tool data to an external service. |
 | SQLite | **Only** for pure unit tests that don't touch locking, JSON queries, vectors, full-text, percentiles, timestamps-with-timezone or migrations (see §14). Never used to run the app. |
@@ -103,7 +103,8 @@ support-assistant/
 │   │   ├── examples.py            # synthetic example generation
 │   │   ├── router.py              # IntentSelector Protocol + LLM implementation
 │   │   ├── context.py             # prompt context assembly
-│   │   └── guidance_chain.py      # generator: prompt | llm.with_structured_output(...)
+│   │   ├── guidance_chain.py      # generator + tool-calling model interfaces
+│   │   └── heuristic.py           # deterministic offline compiler / examples / router (tests, seed-offline)
 │   ├── capabilities/
 │   │   ├── registry.py            # capability definitions per vertical
 │   │   ├── adapters/
@@ -127,6 +128,7 @@ support-assistant/
 │   │   ├── action_service.py      # approve / reject / execute proposed actions
 │   │   ├── integration_service.py # secrets, mcp servers, bindings, test, go-live
 │   │   ├── eval_service.py
+│   │   ├── eval_metrics.py        # pure metric + approval-decision functions
 │   │   ├── chat_history_service.py
 │   │   └── metrics_service.py
 │   ├── api/
@@ -203,6 +205,7 @@ support-assistant/
 | `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` | optional tracing | `false` / empty |
 | `AGENT_API_KEYS` / `ADMIN_API_KEYS` | comma-separated keys | — |
 | `LOG_LEVEL` | | `INFO` |
+| `COMPANY_CACHE_TTL_SECONDS` | per-process company-context cache (0 disables) | `30` |
 
 Never commit real keys. `.env` is git-ignored.
 
@@ -273,7 +276,7 @@ All have `company_id` and `version_id` (FK → guideline_versions, `ON DELETE CA
 
 | table | columns |
 |---|---|
-| `guideline_sections` | id, ordinal, heading, path, text, char_start, char_end, `embedding vector(N)`, `tsv tsvector GENERATED ALWAYS AS (to_tsvector(cfg, coalesce(heading,'') \|\| ' ' \|\| text)) STORED` |
+| `guideline_sections` | id, ref (`S1`, stable within the version), ordinal, heading, path, text, char_start, char_end, `embedding vector(N)`, `tsv tsvector GENERATED ALWAYS AS (to_tsvector(cfg, coalesce(heading,'') \|\| ' ' \|\| text)) STORED` |
 | `intents` | id, key (UNIQUE per version), name, description, conditions json, steps json, reply_template, placeholders json, source_section_ids json |
 | `intent_examples` | id, intent_id FK (cascade), text, split (`index`\|`eval`), embedding, tsv |
 | `company_rules` | id, rules json (`tone`, `greeting`, `sign_off`, `empathy`, `prohibitions[]`, `escalation_defaults[]`, `formatting[]`), source_section_ids json — exactly one row per version |
@@ -291,15 +294,17 @@ Indexes: HNSW (`vector_cosine_ops`) on every `embedding`; GIN on every `tsv`.
 | table | columns |
 |---|---|
 | `company_secrets` | id, company_id, name (UNIQUE per company), ciphertext, created_by, created_at. Plaintext is never returned by the API or logged. |
-| `mcp_servers` | id, company_id, name, url, transport (`streamable_http`), auth_secret_id NULL, discovered_tools json, last_discovered_at |
+| `mcp_servers` | id, company_id, name, url, transport (`streamable_http`), auth_secret_name NULL, discovered_tools json, last_discovered_at |
 | `capability_bindings` | id, company_id, capability, adapter_type (`mcp`\|`http`\|`sql_readonly`\|`mock`), config json, policy json, status (`draft`\|`tested`\|`live`), last_test_result json, created_at, updated_at. UNIQUE(company_id, capability). |
 | `tool_calls` | id, company_id, chat_id NULL, proposed_action_id NULL, capability, adapter_type, binding_id, trigger (`prefetch`\|`agent`\|`execution`\|`test`), args json (redacted), result json (truncated), status (`ok`\|`error`\|`timeout`\|`policy_denied`), latency_ms, error, created_at |
 | `proposed_actions` | id, company_id, chat_id, capability, args json, reason, step_ref, policy_check json, status (`proposed`\|`denied`\|`approved`\|`rejected`\|`executing`\|`executed`\|`failed`), idempotency_key UNIQUE, result json, decided_by, decided_at, executed_at, error |
 
 `config` by adapter:
 - `mcp`: `{server_id, tool_name, arg_map}`
-- `http`: `{method, url, headers_template, body_template, auth_secret_id, response_path}`
-- `sql_readonly`: `{dsn_secret_id, statement, param_map}`
+- `http`: `{method, url, headers, query, body, auth_secret, auth_header?, auth_scheme?, response_path}` (`{arg}` templates)
+- `sql_readonly`: `{dsn_secret, statement}` (`:name` parameters bound from the capability args)
+
+Secrets are referenced **by name** (unique per company).
 - `mock`: `{store: "bookshop_orders" | "vpn_accounts"}`
 
 ### `chats`
@@ -332,16 +337,17 @@ Indexes: HNSW (`vector_cosine_ops`) on every `embedding`; GIN on every `tsv`.
 ### Interface (`app/search/base.py`)
 ```python
 class SearchGateway(Protocol):
-    async def search_intents(self, company_id: UUID, version_id: UUID, query_vec: list[float], query_text: str, k: int) -> list[IntentCandidate]: ...
-    async def search_facts(self, company_id: UUID, version_id: UUID, query_vec: list[float], query_text: str, k: int) -> list[FactHit]: ...
-    async def search_sections(self, company_id: UUID, version_id: UUID, query_vec: list[float], query_text: str, k: int) -> list[SectionHit]: ...
+    # Query = (company_id, version_id, vector, text): every search is tenant + version scoped
+    async def search_intents(self, q: Query, k: int) -> list[IntentCandidate]: ...
+    async def search_facts(self, q: Query, k: int) -> list[FactHit]: ...
+    async def search_sections(self, q: Query, k: int) -> list[SectionHit]: ...
     async def healthcheck(self) -> bool: ...
 ```
 Indexing is just inserting rows with embeddings (done by the ingestion repository in the version's transaction); deleting a version cascades. Nothing else needs a vector-store cleanup.
 
 ### Hybrid query
 - Vector arm: `ORDER BY embedding <=> :q LIMIT n` with `WHERE company_id = :c AND version_id = :v`.
-- Text arm: `ts_rank(tsv, websearch_to_tsquery(cfg, :text))` with the same filter.
+- Text arm: `ts_rank(tsv, to_tsquery(cfg, :q))` with the same filter, where `:q` is an **OR** query built in code from the message's alphanumeric words minus stop words (`refund | damaged | book`). Customer messages are long, so an AND query (`plainto`/`websearch_to_tsquery`) would rarely match.
 - Fuse with **RRF** (`1 / (60 + rank)`), in `search/fusion.py` (pure, unit-tested).
 - Intents: search `intent_examples` (split = `index`), then aggregate **max score per intent** and return the top `k` intents with their best example and scores.
 - In the same transaction, `SET LOCAL hnsw.ef_search = :HNSW_EF_SEARCH` and `SET LOCAL hnsw.iterative_scan = relaxed_order`. Filtered HNSW otherwise post-filters and can return too few rows for small tenants.
@@ -407,7 +413,7 @@ any node error ─────────────────────�
    - candidates: `search_intents` top `ROUTING_CANDIDATES`;
    - selection: the `ROUTER_MODEL` gets the candidates' keys + descriptions + message and returns `IntentSelection{intents: [{key, confidence, message_span}], no_match, entities: {order_id?, email?, ...}}`, capped at `ROUTING_MAX_INTENTS`. Keys not among the candidates are dropped. **This handles messages with several intents.**
 3. **retrieve_facts** — `search_facts` top `REFERENCE_TOP_K`, in parallel with `route`.
-4. **fallback_sections** — if `no_match` or the top candidate score < `ROUTING_MIN_SCORE`: `search_sections` top `FALLBACK_SECTION_TOP_K`. The response is forced to `confidence="low"`, a safe holding reply and an escalation recommendation; the chat is flagged `no_match` for coverage review.
+4. **fallback_sections** — if the router selected nothing (`no_match`). The retrieval-only no-match rule (used by evals and the offline router) is: no candidates, or no candidate has a keyword match **and** the best cosine similarity < `ROUTING_MIN_SCORE` (RRF scores are rank-based and can't be thresholded). Then `search_sections` top `FALLBACK_SECTION_TOP_K`. The response is forced to `confidence="low"`, a safe holding reply and an escalation recommendation; the chat is flagged `no_match` for coverage review.
 5. **prefetch** (deterministic, skipped when `TOOLS_ENABLED=false`) — for each selected intent's `lookup` steps whose capability has a `live` binding and whose required args are present in `entities` / agent notes, call the capability through the gateway **without asking the LLM**.
 6. **tool_agent** — for lookups prefetch couldn't do, the generator model is bound to **only** the read capabilities that are bound for the selected intents (never a whole MCP server, never write capabilities). Limits: `AGENT_MAX_STEPS` (graph `recursion_limit`), `TOOL_TIMEOUT_SECONDS` per call, `AGENT_TOTAL_TIMEOUT_SECONDS` overall. If any limit trips, the remaining lookups become manual steps — the chat does not fail. Skipped when there is nothing left to look up.
 7. **generate** — `prompt | llm.with_structured_output(GuidanceOutput, include_raw=True)`; token usage from `AIMessage.usage_metadata`.
@@ -435,12 +441,13 @@ any node error ─────────────────────�
 ### Structured output (`ai/schemas.py`)
 ```python
 class PlanStep(BaseModel):
-    step_ref: str                      # "refund_request#s3"
+    step_ref: str  # "refund_request#s3"
     type: Literal["say", "ask", "lookup", "action", "escalate"]
     instruction: str
     performed_by: Literal["ai", "ai_verified", "needs_approval", "agent"]
     tool_call_id: str | None = None
-    proposed_action_id: str | None = None   # filled by validate_and_gate
+    proposed_action_id: str | None = None  # filled by validate_and_gate
+
 
 class IntentGuidance(BaseModel):
     intent_key: str
@@ -448,18 +455,20 @@ class IntentGuidance(BaseModel):
     steps: list[PlanStep]
     missing_information: list[str]
 
+
 class ProposedAction(BaseModel):
     capability: str
     args: dict[str, Any]
     reason: str
     step_ref: str
 
+
 class GuidanceOutput(BaseModel):
     detected_intents: list[IntentGuidance]
-    recommended_response: str          # one combined reply in the company's tone
+    recommended_response: str  # one combined reply in the company's tone
     requires_escalation: bool
     escalation_reason: str | None
-    references: list[str]              # "intent:key#sN" | "fact:<id>" | "section:<id>" | "tool:<id>"
+    references: list[str]  # "intent:key#sN" | "fact:<id>" | "section:<id>" | "tool:<id>"
     proposed_actions: list[ProposedAction]
     confidence: Literal["high", "medium", "low"]
     missing_information: list[str]
@@ -494,6 +503,7 @@ Each has `name`, `kind`, `description`, `input_schema`, `output_schema`, and `po
 ```python
 class CapabilityAdapter(Protocol):
     adapter_type: str
+
     async def invoke(self, binding: Binding, args: dict, ctx: CallContext) -> ToolResult: ...
     async def test(self, binding: Binding, sample_args: dict, ctx: CallContext) -> ToolResult: ...
 ```
@@ -695,12 +705,12 @@ No test needs a Gemini key, hosted Supabase or external network.
 
 ### 14a. Shared fakes
 - Embeddings: `DeterministicFakeEmbedding(size=EMBEDDING_DIMENSIONS)`.
-- `FakePlaybookCompiler`: deterministically turns fixture `.txt` (numbered sections, "Approach to solve" bullets, "Sample reply") into intents, rules and facts; maps known phrases to capabilities.
-- `FakeExampleGenerator`: deterministic examples per intent (e.g. intent name + bullet text variations).
-- `FakeIntentSelector`: scripted selections, including multi-intent and no-match.
+- `HeuristicPlaybookCompiler` (`app/ai/heuristic.py`, also used by `seed.py --fake-compiler`): deterministically turns fixture `.txt` (numbered sections, "Approach to solve" bullets, "Sample reply") into intents, rules and facts; maps known phrases to capabilities.
+- `HeuristicExampleGenerator`: deterministic examples per intent (e.g. intent name + bullet text variations).
+- `ScriptedSelector` (tests) / `HeuristicIntentSelector` (app): scripted selections, including multi-intent and no-match.
 - Fake generator returning a fixed `GuidanceOutput`, and a failing fake for error paths.
 - Scripted fake tool-calling chat model (emits `tool_calls`, then the final output). Check whether a `langchain_core` fake supports `bind_tools`; otherwise write a small one.
-- Mock adapters; an in-process MCP test server (FastMCP from the `mcp` SDK) on an ephemeral port.
+- Mock adapters; an in-process MCP test server (`MCPServer` from the `mcp` SDK), connected through `McpAdapter(connector=...)` — no ports or network.
 - `INGESTION_SYNC=true`, `OUTBOUND_ALLOW_PRIVATE_NETWORK=true`, a test Fernet key.
 
 ### 14b. Unit tier — `tests/unit/`, marker `unit`
@@ -796,7 +806,7 @@ Opt-in (skipped unless `GOOGLE_API_KEY` is set): upload and compile the bookshop
 
 v1 (done): 1 scaffold + local DB · 2 DB layer · 3 vector store · 4 ingestion · 5 AI layer · 6 chats · 7 auth · 8 metrics · 9 seed/Docker/CI/README · 10 final pass.
 
-v2:
+v2 (done):
 11. **pgvector + schema** — migration `0002` (extension, new tables, column changes, chats changes), models, repositories, `SearchGateway` + fusion; remove Chroma code, deps and config. U10, integration 8, 15.
 12. **Parsing** — parser interface, `.txt` parser, registry. U1, U2, U6.
 13. **Compilation & ingestion v2** — compiler + validation, example generation, embedding, transactional persist, fake compiler. U9; integration 1, 2, 5, 6, 7, 22.

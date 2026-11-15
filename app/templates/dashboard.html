@@ -86,7 +86,40 @@
     </section>
   </div>
 
+  {% set r = summary.routing %}{% set t = summary.tools %}
+  <section class="tiles" aria-label="Routing and tools">
+    <div class="tile"><div class="label">No-match rate</div><div class="value {{ 'status-bad' if r.no_match_rate > 0.1 else '' }}">{{ '%.1f' % (r.no_match_rate * 100) }}%</div><div class="sub">messages no playbook covers</div></div>
+    <div class="tile"><div class="label">Multi-intent</div><div class="value">{{ '%.1f' % (r.multi_intent_rate * 100) }}%</div><div class="sub">chats with 2+ intents</div></div>
+    <div class="tile"><div class="label">Agent corrections</div><div class="value">{{ '%.1f' % (r.feedback_correction_rate * 100) }}%</div><div class="sub">of {{ r.feedback_count }} feedback items</div></div>
+    <div class="tile"><div class="label">Tool p95</div><div class="value">{{ '%.0f' % t.p95_latency_ms if t.p95_latency_ms is not none else '—' }}<span class="sub"> ms</span></div><div class="sub">prefetch share {{ '%.0f' % (t.prefetch_share * 100) }}%</div></div>
+    <div class="tile"><div class="label">Proposed actions</div><div class="value">{{ t.proposals.values() | sum }}</div><div class="sub">{{ t.proposals.get('executed', 0) }} executed · {{ t.proposals.get('denied', 0) }} denied</div></div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Top intents</h2>
+      {% if r.top_intents %}<div class="chart-box"><canvas id="intents" role="img" aria-label="Bar chart of chats per intent"></canvas></div>
+      {% else %}<div class="empty">No routed chats in this window</div>{% endif %}
+    </section>
+    <section class="card">
+      <h2>Tool calls by capability</h2>
+      {% if t.calls %}<div class="chart-box"><canvas id="tools" role="img" aria-label="Bar chart of tool calls per capability"></canvas></div>
+      {% else %}<div class="empty">No tool calls in this window</div>{% endif %}
+    </section>
+  </div>
+
   <div class="grid section">
+    <section class="card">
+      <h2>Latest routing evals</h2>
+      <table>
+        <thead><tr><th>Company</th><th class="num">Version</th><th>Mode</th><th class="num">Top-1</th><th class="num">Recall@k</th></tr></thead>
+        <tbody>
+        {% for e in r.latest_eval %}
+          <tr><td>{{ e.company }}</td><td class="num">v{{ e.version }}</td><td>{{ e.mode }}</td><td class="num">{{ '%.0f%%' % (e.top1 * 100) if e.top1 is not none else '—' }}</td><td class="num">{{ '%.0f%%' % (e.recall_at_k * 100) if e.recall_at_k is not none else '—' }}</td></tr>
+        {% else %}<tr><td colspan="5" class="empty">No eval runs yet</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </section>
     <section class="card">
       <h2>Per company</h2>
       <table>
@@ -136,6 +169,15 @@
     if (comp) new Chart(comp, { type: 'bar', options: base(true), data: {
       labels: summary.by_company.map(d => d.company),
       datasets: [{ label: 'Chats', data: summary.by_company.map(d => d.chats), ...bar }] } });
+    const intents = document.getElementById('intents');
+    if (intents) new Chart(intents, { type: 'bar', options: base(true), data: {
+      labels: summary.routing.top_intents.map(d => d.intent),
+      datasets: [{ label: 'Chats', data: summary.routing.top_intents.map(d => d.chats), ...bar }] } });
+    const tools = document.getElementById('tools');
+    if (tools) new Chart(tools, { type: 'bar', options: base(true), data: {
+      labels: summary.tools.calls.map(d => d.capability),
+      datasets: [{ label: 'Calls', data: summary.tools.calls.map(d =>
+        Object.entries(d).filter(([k]) => k !== 'capability').reduce((a, [, n]) => a + n, 0)), ...bar }] } });
   }
 </script>
 </body>

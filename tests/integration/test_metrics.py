@@ -9,7 +9,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.models import Chat, Company, GuidelineVersion
+from app.db.models import Chat, Company, GuidelineVersion, ProposedAction, ToolCall
 from tests.conftest import ADMIN_HEADERS, ADMIN_KEY
 from tests.integration.conftest import create_company
 
@@ -18,14 +18,16 @@ DAY2 = datetime(2026, 10, 2, 23, 30, tzinfo=UTC)
 WINDOW = {"from": "2026-10-01T00:00:00Z", "to": "2026-10-03T00:00:00Z"}
 
 
-def _guidance(escalate: bool, confidence: str) -> dict[str, object]:
+def _guidance(escalate: bool, confidence: str, n_intents: int = 1) -> dict[str, object]:
     return {
+        "detected_intents": [
+            {"intent_key": f"k{i}", "confidence": confidence, "steps": []} for i in range(n_intents)
+        ],
         "recommended_response": "ok",
-        "handling_instructions": [],
         "requires_escalation": escalate,
         "escalation_reason": "x" if escalate else None,
-        "detected_intent": "x",
-        "guideline_references": [],
+        "references": [],
+        "proposed_actions": [],
         "confidence": confidence,
         "missing_information": [],
     }
@@ -46,7 +48,14 @@ async def _seed(sm: async_sessionmaker[AsyncSession]) -> None:
                     latency_ms_total=(i + 1) * 100,
                     input_tokens=100,
                     output_tokens=10,
-                    guidance=_guidance(escalate=i < 2, confidence="high" if i < 7 else "low"),
+                    guidance=_guidance(
+                        escalate=i < 2,
+                        confidence="high" if i < 7 else "low",
+                        n_intents=2 if i < 3 else 1,
+                    ),
+                    routing={"no_match": i == 9, "selected": [], "candidates": []},
+                    primary_intent="refund" if i < 6 else "shipping",
+                    feedback={"changed": i == 0} if i < 2 else None,
                     created_at=DAY1 + timedelta(minutes=i),
                 )
             )
@@ -91,10 +100,54 @@ async def _seed(sm: async_sessionmaker[AsyncSession]) -> None:
                     content_sha256=str(n),
                     byte_size=1,
                     embedding_model="m",
-                    chunk_size=1,
-                    chunk_overlap=0,
                     created_at=DAY1,
                     ready_at=DAY1 + timedelta(seconds=secs) if secs else None,
+                )
+            )
+        # tools: 3 prefetch ok (100, 200, 300 ms), 1 agent timeout (1000 ms), outside: 1
+        chat_ids = [c for c in (await s.execute(select(Chat.id))).scalars()]
+        await s.flush()
+        for trig, status, ms in [
+            ("prefetch", "ok", 100),
+            ("prefetch", "ok", 200),
+            ("prefetch", "ok", 300),
+            ("agent", "timeout", 1000),
+        ]:
+            s.add(
+                ToolCall(
+                    id=uuid.uuid4(),
+                    company_id=book,
+                    chat_id=None,
+                    capability="order.get",
+                    trigger=trig,
+                    status=status,
+                    latency_ms=ms,
+                    created_at=DAY1,
+                )
+            )
+        s.add(
+            ToolCall(
+                id=uuid.uuid4(),
+                company_id=book,
+                capability="order.get",
+                trigger="prefetch",
+                status="ok",
+                latency_ms=5,
+                created_at=DAY1 - timedelta(days=9),
+            )
+        )
+        await s.commit()
+        for i, status in enumerate(["proposed", "executed", "executed", "denied"]):
+            s.add(
+                ProposedAction(
+                    id=uuid.uuid4(),
+                    company_id=book,
+                    chat_id=chat_ids[0],
+                    capability="refund.create",
+                    args={},
+                    status=status,
+                    idempotency_key=f"k{i}",
+                    created_at=DAY1,
                 )
             )
         await s.commit()
@@ -133,6 +186,16 @@ async def test_metrics_summary_matches_seed(
         {"date": "2026-10-02", "chats": 5},
     ]
     assert m["ingestion"] == {"uploads": 3, "ready": 2, "failed": 1, "avg_duration_ms": 2000}
+    routing = m["routing"]
+    assert routing["no_match_rate"] == round(1 / 13, 4)
+    assert routing["multi_intent_rate"] == round(3 / 13, 4)
+    assert routing["top_intents"][0] == {"intent": "refund", "chats": 6}
+    assert routing["feedback_count"] == 2 and routing["feedback_correction_rate"] == 0.5
+    tools = m["tools"]
+    assert tools["calls"] == [{"capability": "order.get", "ok": 3, "timeout": 1}]
+    assert tools["p95_latency_ms"] == 895.0  # percentile_cont over 100, 200, 300, 1000
+    assert tools["prefetch_share"] == 0.75
+    assert tools["proposals"] == {"proposed": 1, "executed": 2, "denied": 1}
 
     # company filter + exact percentiles on a known set (100..1000)
     r = await client.get(
@@ -185,6 +248,7 @@ async def test_prometheus_custom_metrics(client: httpx.AsyncClient) -> None:
     text = (await client.get("/metrics", headers=ADMIN_HEADERS)).text
     assert 'chat_requests_total{company="bookshop",status="success"} 1.0' in text
     assert "chat_latency_seconds_bucket" in text
-    assert 'llm_tokens_total{direction="input"} 120.0' in text
+    assert 'llm_tokens_total{direction="input",role="generator"} 120.0' in text
+    assert "routing_intents_selected_bucket" in text and "ingestion_compile_seconds" in text
     assert 'ingestion_total{status="ready"} 1.0' in text
     assert "http_requests_total" in text

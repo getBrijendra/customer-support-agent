@@ -22,11 +22,9 @@ COPY alembic.ini ./
 COPY scripts ./scripts
 COPY data ./data
 
-RUN useradd --create-home --uid 1000 appuser \
-    && mkdir -p /data/chroma && chown -R appuser /data /app
+RUN useradd --create-home --uid 1000 appuser && chown -R appuser /app
 USER appuser
 
-ENV CHROMA_PERSIST_DIR=/data/chroma
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

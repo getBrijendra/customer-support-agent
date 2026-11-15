@@ -7,20 +7,25 @@ import time
 import uuid
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from prometheus_client import CollectorRegistry, Counter, Histogram
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.capabilities.adapters.base import BindingSnapshot
 from app.repositories.uow import SqlUnitOfWork
 
 
 class UnitOfWork(Protocol):
+    session: Any
     companies: Any
     versions: Any
     chats: Any
     metrics: Any
+    playbooks: Any
+    capabilities: Any
+    evals: Any
 
     async def commit(self) -> None: ...
     async def rollback(self) -> None: ...
@@ -47,9 +52,11 @@ class CompanyContext:
     name: str
     active_version_id: uuid.UUID | None
     active_version_number: int | None
-    active_version_ready: bool
-    collection: str | None
+    active_version_usable: bool  # ready + approved
     embedding_model: str | None
+    embedding_dimensions: int | None
+    rules: dict[str, Any] = field(default_factory=dict)
+    bindings: dict[str, BindingSnapshot] = field(default_factory=dict)  # live only
 
 
 class CompanyContextCache:
@@ -105,8 +112,44 @@ class AppMetrics:
             registry=self.registry,
         )
         self.llm_tokens = Counter(
-            "llm_tokens_total", "LLM tokens used", ["direction"], registry=self.registry
+            "llm_tokens_total", "LLM tokens used", ["role", "direction"], registry=self.registry
         )
         self.ingestions = Counter(
             "ingestion_total", "Guideline ingestions", ["status"], registry=self.registry
+        )
+        self.compile_seconds = Histogram(
+            "ingestion_compile_seconds",
+            "Guideline compilation duration",
+            buckets=(1, 2, 5, 10, 20, 40, 80, 160),
+            registry=self.registry,
+        )
+        self.no_match = Counter(
+            "routing_no_match_total",
+            "Chats with no matching intent",
+            ["company"],
+            registry=self.registry,
+        )
+        self.intents_selected = Histogram(
+            "routing_intents_selected",
+            "Intents selected per chat",
+            buckets=(0, 1, 2, 3, 5),
+            registry=self.registry,
+        )
+        self.tool_calls = Counter(
+            "tool_calls_total",
+            "Capability calls",
+            ["capability", "adapter", "status"],
+            registry=self.registry,
+        )
+        self.tool_latency = Histogram(
+            "tool_latency_seconds",
+            "Capability call latency",
+            buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
+            registry=self.registry,
+        )
+        self.proposed_actions = Counter(
+            "proposed_actions_total",
+            "Proposed actions by status",
+            ["status"],
+            registry=self.registry,
         )

@@ -6,13 +6,22 @@ import base64
 import binascii
 import json
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 
 from app.core.errors import ChatNotFound, CompanyNotFound, ValidationFailed
+from app.db.models import ProposedAction, ToolCall
 from app.repositories.chats import ChatFilters, ChatRow
 from app.services.common import UowFactory
 
 MAX_LIMIT = 100
+
+
+@dataclass
+class ChatDetailRows:
+    row: ChatRow
+    tool_calls: list[ToolCall]
+    actions: list[ProposedAction]
 
 
 def encode_cursor(created_at: datetime, chat_id: uuid.UUID) -> str:
@@ -45,11 +54,14 @@ class ChatHistoryService:
         created_to: datetime | None,
         limit: int,
         cursor: str | None,
+        intent: str | None = None,
     ) -> tuple[list[ChatRow], str | None]:
         limit = max(1, min(limit, MAX_LIMIT))
         after = decode_cursor(cursor) if cursor else None
         async with self._uow() as uow:
-            filters = ChatFilters(status=status, created_from=created_from, created_to=created_to)
+            filters = ChatFilters(
+                status=status, intent=intent, created_from=created_from, created_to=created_to
+            )
             if company:
                 found = await uow.companies.get_by_slug(company)
                 if found is None:
@@ -63,9 +75,13 @@ class ChatHistoryService:
             next_cursor = encode_cursor(last.created_at, last.id)
         return rows, next_cursor
 
-    async def get(self, chat_id: uuid.UUID) -> ChatRow:
+    async def get(self, chat_id: uuid.UUID) -> ChatDetailRows:
         async with self._uow() as uow:
             row: ChatRow | None = await uow.chats.get(chat_id)
-        if row is None:
-            raise ChatNotFound(f"Chat {chat_id} not found")
-        return row
+            if row is None:
+                raise ChatNotFound(f"Chat {chat_id} not found")
+            return ChatDetailRows(
+                row=row,
+                tool_calls=await uow.capabilities.tool_calls_for_chat(chat_id),
+                actions=await uow.capabilities.actions_for_chat(chat_id),
+            )

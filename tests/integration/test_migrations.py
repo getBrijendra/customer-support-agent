@@ -28,6 +28,25 @@ async def _drop(url: str) -> None:
         await conn.close()
 
 
+V2_TABLES = {
+    "companies",
+    "guideline_versions",
+    "chats",
+    "guideline_sections",
+    "intents",
+    "intent_examples",
+    "company_rules",
+    "reference_facts",
+    "routing_eval_cases",
+    "routing_eval_runs",
+    "company_secrets",
+    "mcp_servers",
+    "capability_bindings",
+    "tool_calls",
+    "proposed_actions",
+}
+
+
 def test_upgrade_downgrade_upgrade(pg_url: str) -> None:
     # Separate scratch database so the shared test DB is never left half-migrated.
     scratch = make_url(pg_url).set(database="support_assistant_migrations_test")
@@ -42,6 +61,12 @@ def test_upgrade_downgrade_upgrade(pg_url: str) -> None:
         command.downgrade(cfg, "base")
         assert asyncio.run(_tables(url)) <= {"alembic_version"}
         command.upgrade(cfg, "head")
-        assert {"companies", "guideline_versions", "chats"} <= asyncio.run(_tables(url))
+        assert asyncio.run(_tables(url)) >= V2_TABLES
+        command.downgrade(cfg, "0001")  # v2 -> v1 schema
+        tables = asyncio.run(_tables(url))
+        assert {"companies", "guideline_versions", "chats"} <= tables and not V2_TABLES & (
+            tables - {"companies", "guideline_versions", "chats"}
+        )
+        command.upgrade(cfg, "head")
     finally:
         asyncio.run(_drop(url))

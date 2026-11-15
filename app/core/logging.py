@@ -40,7 +40,7 @@ def configure_logging(level: str = "INFO") -> None:
     root.setLevel(level.upper())
     # uvicorn's own access log duplicates our middleware access log.
     logging.getLogger("uvicorn.access").disabled = True
-    for noisy in ("httpx", "chromadb", "google_genai", "httpcore"):
+    for noisy in ("httpx", "google_genai", "httpcore", "mcp"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
