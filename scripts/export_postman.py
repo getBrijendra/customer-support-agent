@@ -161,6 +161,15 @@ ITEMS = [
                 query={"include_text": "true"},
             ),
             req(
+                "Download original uploaded file",
+                "GET",
+                GL + "/{{version}}/file",
+                desc="Returns the exact uploaded bytes from object storage (Supabase "
+                "Storage) as an attachment. 404 FILE_NOT_STORED when file storage was "
+                "disabled at upload time; 502 STORAGE_ERROR when storage is unreachable. "
+                "Use Postman's 'Send and Download' to save it.",
+            ),
+            req(
                 "Compiled playbook (intents, rules, facts, coverage)",
                 "GET",
                 GL + "/{{version}}/playbook",

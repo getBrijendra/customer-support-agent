@@ -82,6 +82,7 @@ playbook. Run `make migrate && make seed` (or re-upload your guidelines) after u
 | `OUTBOUND_ALLOW_PRIVATE_NETWORK` | SSRF guard for HTTP/MCP URLs. `true` locally, **`false` in prod**. |
 | `GUIDELINE_STORAGE_BACKEND`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GUIDELINE_STORAGE_BUCKET` | Where original uploaded files are kept. See *Original guideline files* below. |
 | `LANGSMITH_TRACING` | **Off by default.** See the warning below. |
+| `SENTRY_DSN`, `SENTRY_ENABLE_LOGS`, `SENTRY_LOG_EVENT_LEVEL`, … | Optional Sentry error reporting and log capture. See *Sentry* below. |
 
 ### Supabase connection pooler
 Use the **direct connection** or the **session pooler (port 5432)** for the API. With the
@@ -124,6 +125,18 @@ LangGraph and LangChain can send traces to LangSmith. Setting `LANGSMITH_TRACING
 API key **sends customer messages, guideline text and tool results to a third-party service**.
 Only enable it for debugging with non-sensitive data. Logs, Prometheus metrics and the
 `tool_calls` audit table already give you a full trace without it.
+
+### Sentry (optional, off by default)
+Set `SENTRY_DSN` to turn on Sentry. The app's standard `logging` records are forwarded:
+- records at `SENTRY_LOG_EVENT_LEVEL` (default `ERROR`) and above, and unhandled 5xx exceptions, become **issues**;
+- records at `SENTRY_LOG_BREADCRUMB_LEVEL` (default `INFO`) are attached as **breadcrumbs**;
+- with `SENTRY_ENABLE_LOGS=true`, records at `SENTRY_LOGS_LEVEL` and above also go to **Sentry Logs**.
+
+Events are tagged with the `request_id` so they line up with the JSON logs. Domain errors (4xx)
+are not reported. `send_default_pii` is off, and request bodies, query strings, cookies and local
+variables are never sent. `X-API-Key` and other secret-like fields are scrubbed. The app logs only
+lengths and hashes of customer text, but Sentry is still a third-party service.
+`SENTRY_TRACES_SAMPLE_RATE` (default `0`) turns on performance tracing.
 
 ### Production
 1. Copy `.env.prod.example`. Set `DATABASE_URL` (direct connection or session pooler, port 5432), `SECRETS_ENCRYPTION_KEY`, `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (original-file storage), and `OUTBOUND_ALLOW_PRIVATE_NETWORK=false`.

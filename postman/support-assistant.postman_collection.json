@@ -443,6 +443,46 @@
           ]
         },
         {
+          "name": "Download original uploaded file",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{agent_key}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/companies/{{company}}/guidelines/{{version}}/file",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "companies",
+                "{{company}}",
+                "guidelines",
+                "{{version}}",
+                "file"
+              ]
+            },
+            "description": "Returns the exact uploaded bytes from object storage (Supabase Storage) as an attachment. 404 FILE_NOT_STORED when file storage was disabled at upload time; 502 STORAGE_ERROR when storage is unreachable. Use Postman's 'Send and Download' to save it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Compiled playbook (intents, rules, facts, coverage)",
           "request": {
             "method": "GET",
