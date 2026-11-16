@@ -1,0 +1,139 @@
+{
+  "_comment": "Demo data for the AgriFarm in-process MCP server (app/capabilities/adapters/local_mcp/agrifarm.py). Read on every tool call; edit freely. 'as_of' is the server's fixed 'today' so all results are deterministic.",
+  "as_of": "2026-11-16",
+  "currency": "USD",
+  "delivery_fee": 4.9,
+  "free_delivery_threshold": 45.0,
+  "packing_cutoff": "20:00 the day before delivery",
+  "zones": {
+    "north": {"postcodes": ["94101", "94102", "94103"], "delivery_days": ["Tue", "Thu", "Sat"]},
+    "east": {"postcodes": ["94107", "94110"], "delivery_days": ["Tue", "Sat"]},
+    "valley": {"postcodes": ["94920", "94941"], "delivery_days": ["Thu"]}
+  },
+  "slots": [
+    {"slot_id": "N-2026-11-17-AM", "zone": "north", "date": "2026-11-17", "window": "08:00-12:00", "capacity_left": 0},
+    {"slot_id": "N-2026-11-17-PM", "zone": "north", "date": "2026-11-17", "window": "14:00-18:00", "capacity_left": 6},
+    {"slot_id": "N-2026-11-19-AM", "zone": "north", "date": "2026-11-19", "window": "08:00-12:00", "capacity_left": 11},
+    {"slot_id": "N-2026-11-19-PM", "zone": "north", "date": "2026-11-19", "window": "14:00-18:00", "capacity_left": 3},
+    {"slot_id": "N-2026-11-21-AM", "zone": "north", "date": "2026-11-21", "window": "09:00-13:00", "capacity_left": 14},
+    {"slot_id": "E-2026-11-17-PM", "zone": "east", "date": "2026-11-17", "window": "15:00-19:00", "capacity_left": 2},
+    {"slot_id": "E-2026-11-21-AM", "zone": "east", "date": "2026-11-21", "window": "09:00-13:00", "capacity_left": 9},
+    {"slot_id": "E-2026-11-21-PM", "zone": "east", "date": "2026-11-21", "window": "14:00-18:00", "capacity_left": 0},
+    {"slot_id": "V-2026-11-19-AM", "zone": "valley", "date": "2026-11-19", "window": "10:00-14:00", "capacity_left": 5},
+    {"slot_id": "V-2026-11-26-AM", "zone": "valley", "date": "2026-11-26", "window": "10:00-14:00", "capacity_left": 12}
+  ],
+  "customers": {
+    "priya.sharma@example.com": {"name": "Priya Sharma", "postcode": "94103", "store_credit": 0.0},
+    "daniel.okafor@example.com": {"name": "Daniel Okafor", "postcode": "94110", "store_credit": 5.0},
+    "emma.lindqvist@example.com": {"name": "Emma Lindqvist", "postcode": "94102", "store_credit": 0.0},
+    "marcus.bell@example.com": {"name": "Marcus Bell", "postcode": "94941", "store_credit": 12.5},
+    "sofia.reyes@example.com": {"name": "Sofia Reyes", "postcode": "94107", "store_credit": 0.0}
+  },
+  "products": [
+    {"sku": "VEG-TOM-HEIR-1KG", "name": "Heirloom Tomatoes 1kg", "category": "vegetables", "price": 6.5, "stock": 0, "in_season": false, "next_available": "2026-12-03", "note": "Greenhouse crop; first winter harvest expected early December.", "alternatives": ["VEG-PUMP-BUT", "VEG-SPIN-250"]},
+    {"sku": "FRU-STRAW-500", "name": "Organic Strawberries 500g", "category": "fruit", "price": 5.9, "stock": 0, "in_season": false, "next_available": "2027-05-10", "note": "Field-grown; season runs May to July.", "alternatives": ["FRU-APP-HONEY-1KG", "FRU-PEAR-1KG"]},
+    {"sku": "FRU-APP-HONEY-1KG", "name": "Honeycrisp Apples 1kg", "category": "fruit", "price": 4.8, "stock": 210, "in_season": true, "next_available": null, "note": "Picked October, kept in controlled-atmosphere storage.", "alternatives": []},
+    {"sku": "FRU-PEAR-1KG", "name": "Bosc Pears 1kg", "category": "fruit", "price": 5.2, "stock": 18, "in_season": true, "next_available": null, "note": "Low stock; last orchard pick of the year.", "alternatives": ["FRU-APP-HONEY-1KG"]},
+    {"sku": "VEG-PUMP-BUT", "name": "Butternut Squash (each)", "category": "vegetables", "price": 3.4, "stock": 140, "in_season": true, "next_available": null, "note": null, "alternatives": []},
+    {"sku": "VEG-SPIN-250", "name": "Baby Spinach 250g", "category": "vegetables", "price": 3.2, "stock": 85, "in_season": true, "next_available": null, "note": null, "alternatives": []},
+    {"sku": "DAI-EGG-FR-12", "name": "Free-range Eggs (12)", "category": "dairy_eggs", "price": 5.8, "stock": 320, "in_season": true, "next_available": null, "note": null, "alternatives": []},
+    {"sku": "DAI-MILK-WH-2L", "name": "Whole Milk 2L", "category": "dairy_eggs", "price": 3.9, "stock": 96, "in_season": true, "next_available": null, "note": "Bottled within 24 hours of milking.", "alternatives": []},
+    {"sku": "PAN-HONEY-RAW-500", "name": "Raw Wildflower Honey 500g", "category": "pantry", "price": 11.0, "stock": 0, "in_season": true, "next_available": "2026-11-24", "note": "Jarring batch due from the apiary on 24 November.", "alternatives": []},
+    {"sku": "BAK-SOUR-800", "name": "Sourdough Loaf 800g", "category": "bakery", "price": 6.9, "stock": 40, "in_season": true, "next_available": null, "note": "Baked the morning of delivery.", "alternatives": []}
+  ],
+  "orders": {
+    "AF-10421": {
+      "email": "priya.sharma@example.com",
+      "postcode": "94103",
+      "status": "delivered",
+      "placed_at": "2026-11-12",
+      "delivery": {"date": "2026-11-14", "slot_id": "N-2026-11-14-AM", "window": "09:00-13:00", "delivered_at": "2026-11-14T11:42:00", "courier": "GreenRoute Couriers", "tracking": "GR-884120", "driver_note": "Left at front door, customer not home."},
+      "cold_chain": {"max_temp_c": 9.5, "limit_c": 5.0, "minutes_above_limit": 135, "breach": true},
+      "items": [
+        {"sku": "VEG-TOM-HEIR-1KG", "name": "Heirloom Tomatoes 1kg", "qty": 1, "price": 6.5},
+        {"sku": "DAI-EGG-FR-12", "name": "Free-range Eggs (12)", "qty": 2, "price": 5.8},
+        {"sku": "VEG-SPIN-250", "name": "Baby Spinach 250g", "qty": 1, "price": 3.2},
+        {"sku": "DAI-MILK-WH-2L", "name": "Whole Milk 2L", "qty": 1, "price": 3.9}
+      ],
+      "delivery_fee": 4.9,
+      "total": 30.1,
+      "refunded": 0.0
+    },
+    "AF-10458": {
+      "email": "daniel.okafor@example.com",
+      "postcode": "94110",
+      "status": "confirmed",
+      "placed_at": "2026-11-15",
+      "delivery": {"date": "2026-11-17", "slot_id": "E-2026-11-17-PM", "window": "15:00-19:00", "delivered_at": null, "courier": "GreenRoute Couriers", "tracking": null, "driver_note": null},
+      "cold_chain": null,
+      "items": [
+        {"sku": "BAK-SOUR-800", "name": "Sourdough Loaf 800g", "qty": 1, "price": 6.9},
+        {"sku": "FRU-APP-HONEY-1KG", "name": "Honeycrisp Apples 1kg", "qty": 2, "price": 4.8},
+        {"sku": "VEG-PUMP-BUT", "name": "Butternut Squash (each)", "qty": 3, "price": 3.4},
+        {"sku": "DAI-MILK-WH-2L", "name": "Whole Milk 2L", "qty": 2, "price": 3.9}
+      ],
+      "delivery_fee": 4.9,
+      "total": 39.4,
+      "refunded": 0.0
+    },
+    "AF-10463": {
+      "email": "emma.lindqvist@example.com",
+      "postcode": "94102",
+      "status": "delayed",
+      "placed_at": "2026-11-12",
+      "delivery": {"date": "2026-11-14", "slot_id": "N-2026-11-14-PM", "window": "14:00-18:00", "delivered_at": null, "courier": "GreenRoute Couriers", "tracking": "GR-884377", "driver_note": "Van breakdown on route; parcel returned to depot chilled.", "new_eta": "2026-11-17T10:00:00"},
+      "cold_chain": {"max_temp_c": 3.8, "limit_c": 5.0, "minutes_above_limit": 0, "breach": false},
+      "items": [
+        {"sku": "DAI-EGG-FR-12", "name": "Free-range Eggs (12)", "qty": 1, "price": 5.8},
+        {"sku": "FRU-PEAR-1KG", "name": "Bosc Pears 1kg", "qty": 2, "price": 5.2},
+        {"sku": "BAK-SOUR-800", "name": "Sourdough Loaf 800g", "qty": 1, "price": 6.9},
+        {"sku": "VEG-SPIN-250", "name": "Baby Spinach 250g", "qty": 2, "price": 3.2}
+      ],
+      "delivery_fee": 4.9,
+      "total": 34.4,
+      "refunded": 0.0
+    },
+    "AF-10470": {
+      "email": "sofia.reyes@example.com",
+      "postcode": "94107",
+      "status": "packed",
+      "placed_at": "2026-11-14",
+      "delivery": {"date": "2026-11-17", "slot_id": "E-2026-11-17-PM", "window": "15:00-19:00", "delivered_at": null, "courier": "GreenRoute Couriers", "tracking": "GR-884512", "driver_note": null},
+      "cold_chain": null,
+      "items": [
+        {"sku": "FRU-APP-HONEY-1KG", "name": "Honeycrisp Apples 1kg", "qty": 3, "price": 4.8},
+        {"sku": "DAI-EGG-FR-12", "name": "Free-range Eggs (12)", "qty": 2, "price": 5.8},
+        {"sku": "VEG-PUMP-BUT", "name": "Butternut Squash (each)", "qty": 4, "price": 3.4},
+        {"sku": "BAK-SOUR-800", "name": "Sourdough Loaf 800g", "qty": 1, "price": 6.9}
+      ],
+      "delivery_fee": 0.0,
+      "total": 46.5,
+      "refunded": 0.0
+    }
+  },
+  "farm_boxes": {
+    "priya.sharma@example.com": {
+      "plan": "Family", "weekly_price": 39.0, "status": "active", "delivery_day": "Sat",
+      "next_delivery": "2026-11-21", "billing_day": "Thu", "paused_until": null, "pause_requested_at": null,
+      "charges": [
+        {"charge_id": "ch_fb_7781", "date": "2026-11-12", "amount": 39.0, "status": "paid"},
+        {"charge_id": "ch_fb_7650", "date": "2026-11-05", "amount": 39.0, "status": "paid"}
+      ]
+    },
+    "marcus.bell@example.com": {
+      "plan": "Large", "weekly_price": 54.0, "status": "paused", "delivery_day": "Thu",
+      "next_delivery": "2026-12-03", "billing_day": "Thu", "paused_until": "2026-11-30", "pause_requested_at": "2026-11-11T19:20:00",
+      "charges": [
+        {"charge_id": "ch_fb_7802", "date": "2026-11-12", "amount": 54.0, "status": "paid", "note": "Charged after a pause requested before the Thursday cut-off"},
+        {"charge_id": "ch_fb_7611", "date": "2026-11-05", "amount": 54.0, "status": "paid"}
+      ]
+    },
+    "daniel.okafor@example.com": {
+      "plan": "Small", "weekly_price": 24.0, "status": "active", "delivery_day": "Tue",
+      "next_delivery": "2026-11-17", "billing_day": "Thu", "paused_until": null, "pause_requested_at": null,
+      "charges": [
+        {"charge_id": "ch_fb_7795", "date": "2026-11-12", "amount": 24.0, "status": "paid"}
+      ]
+    }
+  }
+}

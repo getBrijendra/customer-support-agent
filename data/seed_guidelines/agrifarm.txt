@@ -1,0 +1,97 @@
+AgriFarm Customer Support Guidelines
+AgriFarm is a cooperative of family farms that delivers fresh produce, dairy, eggs and bakery goods within 48 hours of harvest, plus a weekly Farm Box subscription.
+
+TONE AND COMMUNICATION RULES
+- Greet the customer by first name: "Hello [Name],".
+- Keep a warm, down-to-earth tone; we are a group of family farms, not a call centre.
+- Show empathy first when food arrives in poor condition; a spoiled delivery can mean a missed family meal.
+- Sign off every reply with "Fresh regards, The AgriFarm Support Team".
+- Never ask the customer to send perishable items back; spoiled food is composted or thrown away by the customer.
+- Never promise a delivery date or time window that has not been confirmed in the delivery system.
+- Do not give medical, allergy or food-safety advice beyond the information printed on the product label.
+- Escalate any report of illness, a foreign object or contamination to the Food Safety team immediately and stop all other troubleshooting.
+
+1. Damaged or Spoiled Produce
+Approach to solve:
+- Apologize and acknowledge how frustrating it is to receive spoiled food.
+- Verify the affected items and quantities against the order in the order system.
+- Ask the customer for a photo of the affected items and the delivery box, sent within 48 hours of delivery.
+- Check the courier cold-chain record for temperature breaches during transit.
+- Issue a refund for the value of the affected items when the customer prefers money back.
+- Ship a replacement of the affected items with the next available delivery when the customer prefers new produce.
+- Offer a discount code of 10% on the next order when more than half of the order was affected.
+- Escalate to the Food Safety team if the customer reports illness, mould throughout the box or a foreign object.
+
+Sample reply:
+Hello [Name],
+I am so sorry your [Items] arrived in poor condition; that is not the AgriFarm standard. Could you send us a photo of the affected items and the box? I can refund [Amount] to your original payment method or send fresh replacements on [Delivery Date], whichever you prefer. Please do not send anything back; simply compost or dispose of the spoiled items.
+Fresh regards, The AgriFarm Support Team
+
+2. Late or Missed Delivery
+Approach to solve:
+- Apologize for the delay and acknowledge that fresh food is time-sensitive.
+- Check the courier status, driver notes and ETA for the order.
+- Check available delivery slots for the customer's postcode.
+- Reschedule the delivery to the slot the customer chooses if the order can still be delivered safely chilled.
+- Issue store credit equal to the delivery fee when the delivery arrives more than 24 hours late.
+- Issue a refund for the full order when the order cannot be delivered within 48 hours of the original date.
+- Escalate to the Logistics team if the courier marked the order as delivered but the customer did not receive it.
+
+Sample reply:
+Hello [Name],
+I am sorry your order [Order ID] did not arrive as planned. I have checked with our courier: [Courier Update]. I can move your delivery to [New Slot]; your produce has been kept chilled at our depot the whole time. As an apology, I have added [Credit Amount] store credit to your account.
+Fresh regards, The AgriFarm Support Team
+
+3. Order Changes and Cancellations
+Approach to solve:
+- Verify the order status and the packing cut-off time in the order system.
+- Ask which items or quantities the customer wants to change, or whether they want to cancel the whole order.
+- Cancel the order if it has not started packing; the full payment goes back to the original payment method.
+- Reschedule the delivery to a different slot when the customer only needs a new delivery date.
+- Explain that once packing has started the order can no longer be changed or cancelled.
+- Issue store credit for unwanted items in a packed order only when the customer was not told about the cut-off at checkout.
+
+Sample reply:
+Hello [Name],
+Thanks for letting us know. Your order [Order ID] has not been packed yet, so I have cancelled it and the full amount of [Amount] will be returned to your original payment method within 3 to 5 business days. If you only need a different day, I can move it to [New Slot] instead.
+Fresh regards, The AgriFarm Support Team
+
+4. Product Availability and Seasonal Items
+Approach to solve:
+- Check the stock level and next harvest date for the product.
+- Inform the customer whether the item is in stock, out of season, or due back on the next harvest date.
+- Suggest an in-season alternative from the same category.
+- Set up a back-in-stock alert so the customer is emailed when the product returns.
+- Explain that we only sell what our farms grow in season, which is why some items are unavailable for months.
+
+Sample reply:
+Hello [Name],
+Thank you for asking about [Product]. It is currently [Availability Status] and we expect it back around [Date]. In the meantime, [Alternative] is in season and freshly picked this week. I have set up an alert so we email you the moment [Product] is back.
+Fresh regards, The AgriFarm Support Team
+
+5. Farm Box Subscription Changes
+Approach to solve:
+- Verify the customer's Farm Box plan, next delivery date and recent charges.
+- Ask whether the customer wants to pause, skip a week, change box size or cancel.
+- Pause the Farm Box for up to 4 weeks when the customer is travelling or has too much produce.
+- Issue a refund for a Farm Box charge taken after the customer paused or cancelled before the Thursday cut-off.
+- Offer a discount code of 15% on the next box when the customer is considering cancelling because of price.
+- Escalate cancellation requests for corporate, office or wholesale accounts to the Accounts team.
+
+Sample reply:
+Hello [Name],
+Of course. I have paused your [Plan] Farm Box for [Weeks] weeks, so there will be no deliveries or charges until it restarts on [Resume Date]. If you would rather change your box size instead, just reply and I will set it up.
+Fresh regards, The AgriFarm Support Team
+
+REFERENCE FACTS
+- Delivery days: north zone Tuesday, Thursday and Saturday; east zone Tuesday and Saturday; valley zone Thursday only.
+- Delivery fee: $4.90 per order, free for orders over $45 and for every Farm Box delivery.
+- Order cut-off: orders are packed from 8 PM the day before delivery; after that an order cannot be changed or cancelled.
+- Farm Box plans: Small $24 per week (1 to 2 people), Family $39 per week (3 to 4 people), Large $54 per week (5 to 6 people).
+- Farm Box cut-off: changes, pauses and cancellations must be made by Thursday 11:59 PM to apply to the following week's box.
+- Farm Box pauses: a box can be paused for 1 to 4 weeks at a time; longer breaks require cancelling.
+- Freshness guarantee: problems with fresh items must be reported within 48 hours of delivery to qualify for a refund or replacement.
+- Refund timing: refunds reach the original payment method in 3 to 5 business days; store credit is available immediately.
+- Packaging: orders ship in insulated boxes with ice packs kept below 5°C; customers get $1 store credit for each box returned to the driver.
+- Seasonal calendar: strawberries May to July, asparagus April to June, tomatoes July to October (greenhouse tomatoes from December), apples August to February, squash September to December.
+- Food Safety team: reachable through the internal escalation queue "food-safety", staffed 7 AM to 9 PM every day.

@@ -1,9 +1,13 @@
 """MCP adapter: calls ONE mapped tool on a company's MCP server (streamable HTTP).
 
 Binding config: {"server_id": "<uuid>", "tool_name": "lookup_order",
-                 "arg_map": {"order_id": "id"}}   # capability arg -> tool arg
+                 "arg_map": {"order_id": "id"},   # capability arg -> tool arg
+                 "idempotency_arg": "idempotency_key"}  # optional: tool arg that receives the
+                                                         # action's idempotency key (writes)
 Only the mapped tool is ever called; other tools on the server are invisible to the model.
 
+Server URLs are `http(s)://...` (streamable HTTP) or `inproc://<name>` for the built-in demo
+servers in `local_mcp/` (connected in-process, no network).
 `connector` can be overridden (tests connect to an in-process `MCPServer`).
 """
 
@@ -17,12 +21,18 @@ from mcp import Client
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 
 from app.capabilities.adapters.base import AdapterError, BindingSnapshot, CallContext, ConfigError
+from app.capabilities.adapters.local_mcp import get_local_server, is_local_url, local_name
 from app.core.net import UnsafeUrl, check_url
 
 Connector = Callable[[str, dict[str, str]], Any]
 
 
 def default_connector(url: str, headers: dict[str, str]) -> Any:
+    if is_local_url(url):
+        try:
+            return get_local_server(local_name(url))
+        except KeyError as exc:
+            raise AdapterError(str(exc)) from exc
     if not headers:
         return url
     return streamable_http_client(url, http_client=create_mcp_http_client(headers=headers))
@@ -40,10 +50,13 @@ class McpAdapter:
             raise ConfigError("mcp config needs server_id and tool_name")
         if not isinstance(config.get("arg_map", {}), dict):
             raise ConfigError("mcp config.arg_map must be an object")
+        idem = config.get("idempotency_arg")
+        if idem is not None and (not isinstance(idem, str) or not idem):
+            raise ConfigError("mcp config.idempotency_arg must be a non-empty string")
 
     async def _target(self, server: dict[str, Any], ctx: CallContext) -> Any:
         url = server["url"]
-        if not self._custom:
+        if not self._custom and not is_local_url(url):
             try:
                 check_url(url, allow_private=ctx.allow_private_network)
             except UnsafeUrl as exc:
@@ -59,6 +72,8 @@ class McpAdapter:
         cfg = binding.config
         arg_map: dict[str, str] = cfg.get("arg_map") or {}
         tool_args = {arg_map.get(k, k): v for k, v in args.items()}
+        if (idem := cfg.get("idempotency_arg")) and ctx.idempotency_key:
+            tool_args[idem] = ctx.idempotency_key
         try:
             async with Client(
                 await self._target(binding.server, ctx), read_timeout_seconds=ctx.timeout
