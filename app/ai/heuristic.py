@@ -39,6 +39,10 @@ _ORDER = re.compile(
 )
 
 _LOOKUP_CAPS = [
+    # specific grocery phrases first ("Farm Box plan" must not fall through to "plan")
+    (("farm box",), "farmbox.get"),
+    (("delivery slot",), "delivery_slot.list"),
+    (("stock level", "harvest", "in stock"), "product.availability"),
     (("tracking", "courier", "shipment", "carrier", "eta"), "shipment.track"),
     (("order",), "order.get"),
     (("subscription", "payment", "billing", "transaction", "renewal", "plan"), "subscription.get"),
@@ -48,6 +52,11 @@ _LOOKUP_CAPS = [
 ]
 _ACTION_CAPS = [
     (("refund",), "refund.create"),
+    (("store credit",), "credit.issue"),
+    (("reschedule",), "delivery.reschedule"),
+    (("cancel the order",), "order.cancel"),
+    (("pause",), "farmbox.pause"),
+    (("back-in-stock alert", "restock alert"), "restock_alert.create"),
     (("return label", "prepaid label"), "return_label.create"),
     (("replacement", "ship correct", "replace", "reship"), "replacement.create"),
     (("discount", "compensation", "coupon"), "discount.issue"),
@@ -57,7 +66,8 @@ _ACTION_CAPS = [
 ]
 _ACTION_VERBS = (
     "process", "issue", "ship", "refund", "reset", "unlock", "apply", "cancel", "replace",
-    "arrange", "retry", "reship", "offer a discount", "offer compensation",
+    "arrange", "retry", "reship", "offer a discount", "offer compensation", "reschedule",
+    "pause", "set up",
 )  # fmt: skip
 _LOOKUP_VERBS = ("verify", "check", "look up", "review", "confirm", "inspect", "validate")
 _ASK_VERBS = ("ask", "request", "collect", "find out", "get the customer", "obtain")

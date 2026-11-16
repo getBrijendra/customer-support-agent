@@ -45,9 +45,10 @@ re-runs the migrations and the seed.
 
 ### Seed data
 `scripts/seed.py` does the following:
-1. Creates `bookshop` and `vpn-saas`.
-2. Uploads and compiles `data/seed_guidelines/bookshop.txt` and `vpn_saas.txt`. You must provide these files.
+1. Creates `bookshop`, `vpn-saas` and `agrifarm`.
+2. Uploads and compiles `data/seed_guidelines/bookshop.txt`, `vpn_saas.txt` and `agrifarm.txt`. You must provide the first two files.
 3. Binds **mock** capabilities so the demo shows verified lookups: bookshop orders and shipments, plus VPN accounts, subscriptions and devices. Writes get policies, e.g. a refund is capped at 50.
+4. For **AgriFarm** (fresh-food delivery plus a weekly Farm Box), registers the built-in MCP server `inproc://agrifarm`, discovers its tools and binds all 13 capabilities to it. The policies are: refund ≤ 60, store credit ≤ 15, discount ≤ 15 %, Farm Box pause ≤ 4 weeks.
 
 Flags:
 - `make seed-offline` (`--fake-compiler`) uses the deterministic heuristic compiler instead of the LLM compiler. It still uses real embeddings when a key is set.
@@ -163,7 +164,20 @@ Playbook steps refer to **abstract capabilities** (`order.get`, `refund.create`,
 | `mock` | `{"store": "bookshop_orders"\|"vpn_accounts"}` | Demo and tests; writes are idempotent |
 | `http` | `{"method","url","headers","query","body","auth_secret","response_path"}` | `{arg}` templates; secret injected at call time; SSRF guard |
 | `sql_readonly` | `{"dsn_secret","statement"}` | One admin-defined parameterized `SELECT` (validated); runs in a `READ ONLY` transaction with `statement_timeout` and a row limit |
-| `mcp` | `{"server_id","tool_name","arg_map"}` | Only the mapped tool is ever callable |
+| `mcp` | `{"server_id","tool_name","arg_map","idempotency_arg"?}` | Only the mapped tool is ever callable; `idempotency_arg` passes the action's idempotency key to the tool |
+
+**In-process MCP server (AgriFarm demo).** `app/capabilities/adapters/local_mcp/agrifarm.py` is a real
+MCP server (`MCPServer` from the `mcp` SDK). It runs inside the API process through the SDK's in-process
+transport, so there is no port and nothing extra to start. To use it, register the server URL `inproc://agrifarm`.
+Its data lives in `data/mcp/agrifarm.json` (orders, cold-chain logs, delivery slots, products/harvest
+dates, Farm Boxes) and is re-read on every call. The file's `as_of` date is the server's "today", so every
+result is deterministic. Write tools enforce business rules: refunds can't exceed the refundable amount,
+packed orders can't be cancelled, full slots are rejected and a box can't be paused twice. They return
+references derived from their arguments (`RF-…`, `CR-…`, `FRESH10-…`) and replay the first result for a
+repeated idempotency key. Writes are not saved back to the file. Demo customers include
+`priya.sharma@example.com` (spoiled order `AF-10421` with a cold-chain breach), `emma.lindqvist@example.com`
+(delayed `AF-10463`), `daniel.okafor@example.com` (cancellable `AF-10458`) and `marcus.bell@example.com`
+(Farm Box charged after a pause).
 
 Rules:
 - **Binding lifecycle:** `PUT` creates a `draft` → `test` (a dry run; writes are only validated unless `execute_write=true`) → `tested` → `go-live` → `live`. Any change resets the binding to `draft`.

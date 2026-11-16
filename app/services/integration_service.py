@@ -14,6 +14,8 @@ from app.capabilities.adapters.base import (
     ConfigError,
     SecretGetter,
 )
+from app.capabilities.adapters.local_mcp import FACTORIES as LOCAL_SERVERS
+from app.capabilities.adapters.local_mcp import is_local_url, local_name
 from app.capabilities.adapters.mcp import McpAdapter
 from app.capabilities.gateway import CapabilityGateway, ToolCallRecord
 from app.capabilities.policy import check_policy
@@ -136,6 +138,12 @@ class IntegrationService:
 
     # ------------------------------------------------------------ mcp servers
     def _check_server_url(self, url: str) -> None:
+        if is_local_url(url):  # built-in in-process demo server: no network involved
+            if local_name(url) not in LOCAL_SERVERS:
+                raise ValidationFailed(
+                    f"Unknown in-process MCP server {url!r} (known: {sorted(LOCAL_SERVERS)})"
+                )
+            return
         try:
             check_url(url, allow_private=self._settings.OUTBOUND_ALLOW_PRIVATE_NETWORK)
         except UnsafeUrl as exc:
@@ -152,7 +160,7 @@ class IntegrationService:
                 company_id=company.id,
                 name=name,
                 url=url,
-                transport="streamable_http",
+                transport="in_process" if is_local_url(url) else "streamable_http",
                 auth_secret_name=auth_secret_name,
                 created_at=utcnow(),
             )
@@ -187,6 +195,8 @@ class IntegrationService:
             for key in ("name", "url", "auth_secret_name"):
                 if key in changes:
                     setattr(server, key, changes[key])
+            if changes.get("url"):
+                server.transport = "in_process" if is_local_url(server.url) else "streamable_http"
             await uow.commit()
         self._cache.invalidate(slug)
         return server

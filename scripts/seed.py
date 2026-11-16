@@ -1,5 +1,6 @@
-"""Create the two demo companies, upload + compile their guideline files through the service
-layer, and (optionally) bind mock capabilities so the demo shows verified lookups.
+"""Create the demo companies, upload + compile their guideline files through the service
+layer, and (optionally) bind capabilities so the demo shows verified lookups: mock stores for
+bookshop / vpn-saas, and the in-process AgriFarm MCP server (`inproc://agrifarm`) for agrifarm.
 
 Idempotent: existing companies are reused; an upload identical to the active version is skipped;
 bindings are re-applied.
@@ -31,6 +32,12 @@ SEED_DIR = ROOT / "data" / "seed_guidelines"
 COMPANIES = [
     ("bookshop", "Bookshop", "Online bookshop", "bookshop.txt"),
     ("vpn-saas", "VPN SaaS", "Consumer VPN subscription service", "vpn_saas.txt"),
+    (
+        "agrifarm",
+        "AgriFarm",
+        "Farm-fresh produce delivery and Farm Box subscriptions",
+        "agrifarm.txt",
+    ),
 ]
 # (capability, mock store, policy, sample args for the test call)
 MOCK_BINDINGS: dict[str, list[tuple[str, str, dict[str, Any], dict[str, Any]]]] = {
@@ -48,6 +55,44 @@ MOCK_BINDINGS: dict[str, list[tuple[str, str, dict[str, Any], dict[str, Any]]]] 
         ("status.get", "vpn_accounts", {}, {}),
         ("refund.create", "vpn_accounts", {"max_amount": 100}, {"amount": 10}),
         ("password.reset", "vpn_accounts", {}, {"email": "jane@example.com"}),
+    ],
+}
+
+
+# AgriFarm: every capability is served by the in-process MCP server (data/mcp/agrifarm.json).
+AGRIFARM_MCP = {"name": "agrifarm-systems", "url": "inproc://agrifarm"}
+_P = "priya.sharma@example.com"
+# (capability, MCP tool, policy, sample args). Writes get the idempotency key as a tool arg.
+MCP_BINDINGS: dict[str, list[tuple[str, str, dict[str, Any], dict[str, Any]]]] = {
+    "agrifarm": [
+        ("order.get", "get_order", {}, {"order_id": "AF-10421"}),
+        ("shipment.track", "track_delivery", {}, {"order_id": "AF-10463"}),
+        ("delivery_slot.list", "list_delivery_slots", {}, {"order_id": "AF-10463"}),
+        ("product.availability", "check_product_availability", {}, {"product": "strawberries"}),
+        ("farmbox.get", "get_farm_box", {}, {"email": _P}),
+        (
+            "refund.create",
+            "issue_refund",
+            {"max_amount": 60},
+            {"order_id": "AF-10421", "amount": 9},
+        ),
+        ("replacement.create", "create_replacement_delivery", {}, {"order_id": "AF-10421"}),
+        ("discount.issue", "issue_discount_code", {"max_pct": 15}, {"email": _P, "percent": 10}),
+        (
+            "delivery.reschedule",
+            "reschedule_delivery",
+            {},
+            {"order_id": "AF-10463", "slot_id": "N-2026-11-19-AM"},
+        ),
+        ("order.cancel", "cancel_order", {}, {"order_id": "AF-10458"}),
+        ("credit.issue", "issue_store_credit", {"max_amount": 15}, {"email": _P, "amount": 4.9}),
+        ("farmbox.pause", "pause_farm_box", {"max_weeks": 4}, {"email": _P, "weeks": 2}),
+        (
+            "restock_alert.create",
+            "create_restock_alert",
+            {},
+            {"email": _P, "product": "strawberries"},
+        ),
     ],
 }
 
@@ -76,6 +121,33 @@ def _overrides(fake: bool, settings: Settings) -> tuple[Settings, dict[str, Any]
         overrides["embeddings_for"] = lambda model: emb
         settings = settings.model_copy(update={"EMBEDDING_MODEL": "fake-embedding"})
     return settings, overrides
+
+
+async def _bind_mcp(integrations: Any, slug: str) -> None:
+    """Register (or reuse) the company's MCP server, discover its tools, bind + test + go live."""
+    from app.capabilities.registry import get_capability
+
+    servers = {s.name: s for s in await integrations.list_servers(slug)}
+    server = servers.get(AGRIFARM_MCP["name"]) or await integrations.create_server(
+        slug, name=AGRIFARM_MCP["name"], url=AGRIFARM_MCP["url"], auth_secret_name=None
+    )
+    server = await integrations.discover(slug, server.id)
+    tools = {t["name"] for t in server.discovered_tools or []}
+    print(f"[{slug}] MCP server {server.url}: {len(tools)} tools discovered")
+    for cap, tool, policy, sample in MCP_BINDINGS[slug]:
+        if tool not in tools:
+            print(f"[{slug}] binding {cap}: FAILED (tool {tool} not on server)")
+            continue
+        config: dict[str, Any] = {"server_id": str(server.id), "tool_name": tool, "arg_map": {}}
+        capability = get_capability(cap)
+        if capability is not None and capability.kind == "write":
+            config["idempotency_arg"] = "idempotency_key"
+        await integrations.put_binding(slug, cap, adapter_type="mcp", config=config, policy=policy)
+        _, result = await integrations.test_binding(slug, cap, sample, execute_write=False)
+        if result["ok"]:
+            await integrations.go_live(slug, cap)
+        status = "live" if result["ok"] else f"FAILED: {result.get('error')}"
+        print(f"[{slug}] binding {cap} -> mcp:{tool}: {status}")
 
 
 async def main(fake: bool, bindings: bool) -> int:
@@ -126,6 +198,8 @@ async def main(fake: bool, bindings: bool) -> int:
             except DuplicateGuidelines as exc:
                 print(f"[{slug}] skipped upload: {exc.message}")
 
+            if bindings and slug in MCP_BINDINGS:
+                await _bind_mcp(integrations, slug)
             if bindings:
                 for cap, store, policy, sample in MOCK_BINDINGS.get(slug, []):
                     await integrations.put_binding(

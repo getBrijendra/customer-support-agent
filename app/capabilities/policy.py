@@ -3,6 +3,7 @@
 Binding policy keys:
 - `max_amount`: upper bound for the `amount` argument
 - `max_pct`: upper bound for the `percent` argument
+- `max_weeks`: upper bound for the `weeks` argument (e.g. subscription pauses)
 - `allowed_values`: {arg: [allowed values]}
 - `blocked`: true disables writes for that capability entirely
 """
@@ -38,6 +39,11 @@ def check_policy(cap: Capability, args: dict[str, Any], policy: dict[str, Any]) 
     max_pct = policy.get("max_pct")
     if max_pct is not None and "percent" in args and float(args["percent"]) > float(max_pct):
         violations.append(f"percent {args['percent']} exceeds max_pct {max_pct}")
+    max_weeks = policy.get("max_weeks")
+    if max_weeks is not None and "weeks" in args and int(args["weeks"]) > int(max_weeks):
+        violations.append(f"weeks {args['weeks']} exceeds max_weeks {max_weeks}")
+    if "weeks" in args and int(args["weeks"]) <= 0:
+        violations.append("weeks must be positive")
     for arg, allowed in (policy.get("allowed_values") or {}).items():
         if arg in args and args[arg] not in allowed:
             violations.append(f"{arg}={args[arg]!r} is not an allowed value")
