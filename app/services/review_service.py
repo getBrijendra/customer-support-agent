@@ -19,6 +19,7 @@ from app.core.errors import (
 from app.core.logging import get_logger
 from app.db.models import Company, GuidelineVersion, ReviewStatus, VersionStatus, utcnow
 from app.services.common import CompanyContextCache, UnitOfWork, UowFactory
+from app.storage.base import FileStore, StorageUnavailable
 
 logger = get_logger(__name__)
 
@@ -36,9 +37,15 @@ async def activate_if_latest(uow: UnitOfWork, company: Company, version: Guideli
 
 
 class ReviewService:
-    def __init__(self, uow_factory: UowFactory, cache: CompanyContextCache) -> None:
+    def __init__(
+        self,
+        uow_factory: UowFactory,
+        cache: CompanyContextCache,
+        file_store: FileStore | None = None,
+    ) -> None:
         self._uow = uow_factory
         self._cache = cache
+        self._files = file_store
 
     async def _locked(
         self, uow: UnitOfWork, slug: str, number: int
@@ -112,7 +119,21 @@ class ReviewService:
             company, version = await self._locked(uow, slug, number)
             if company.active_version_id == version.id:
                 raise VersionIsActive("Cannot delete the active version; activate another first")
+            storage = (version.storage_bucket, version.storage_key)
             await uow.versions.delete(version.id)  # compiled rows + vectors cascade
             await uow.commit()
         self._cache.invalidate(slug)
+        await self._delete_original(*storage)
         logger.info("guidelines.deleted", extra={"company": slug, "version": number})
+
+    async def _delete_original(self, bucket: str | None, key: str | None) -> None:
+        """Best effort: the DB row is already gone; an orphaned object only costs storage."""
+        if not key:
+            return
+        if self._files is None or self._files.bucket != bucket:
+            logger.warning("storage.orphaned", extra={"bucket": bucket, "reason": "not configured"})
+            return
+        try:
+            await self._files.delete(key)
+        except StorageUnavailable as exc:
+            logger.warning("storage.delete_failed", extra={"error": str(exc)[:300]})

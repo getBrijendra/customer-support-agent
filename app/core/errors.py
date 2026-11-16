@@ -121,6 +121,15 @@ class ToolError(DomainError):
     code, status_code, default_message = "TOOL_ERROR", 502, "Capability call failed"
 
 
+class StorageError(DomainError):
+    code, status_code, default_message = "STORAGE_ERROR", 502, "File storage failed"
+
+
+class FileNotStored(DomainError):
+    code, status_code = "FILE_NOT_STORED", 404
+    default_message = "The original file was not stored for this version"
+
+
 class NotFound(DomainError):
     code, status_code, default_message = "NOT_FOUND", 404, "Not found"
 

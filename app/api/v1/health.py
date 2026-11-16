@@ -27,6 +27,8 @@ async def ready(resources: Resources = Depends(get_resources)) -> JSONResponse:
         "database": await ping(resources.engine),
         "search_index": await resources.search.healthcheck(),
     }
+    if resources.file_store is not None:
+        checks["file_storage"] = await resources.file_store.healthcheck()
     ok = all(checks.values())
     body = HealthOut(status="ok" if ok else "degraded", checks=checks)
     return JSONResponse(body.model_dump(), status_code=200 if ok else 503)

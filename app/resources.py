@@ -51,6 +51,8 @@ from app.services.ingestion_service import IngestionService
 from app.services.integration_service import IntegrationService
 from app.services.metrics_service import MetricsService
 from app.services.review_service import ReviewService
+from app.storage.base import FileStore, StorageUnavailable
+from app.storage.factory import build_file_store
 
 logger = get_logger(__name__)
 EmbeddingsFactory = Callable[[str], Embeddings]
@@ -131,6 +133,7 @@ class Resources:
     gateway: CapabilityGateway
     secret_store: SecretStore
     cache: CompanyContextCache
+    file_store: FileStore | None = None
     metrics: AppMetrics = field(default_factory=AppMetrics)
     graph: Any = None
 
@@ -156,10 +159,11 @@ class Resources:
             examples=self.examples,
             embeddings_for=self.embeddings_for,
             evals=self.eval_service(),
+            file_store=self.file_store,
         )
 
     def review_service(self) -> ReviewService:
-        return ReviewService(self.uow_factory, self.cache)
+        return ReviewService(self.uow_factory, self.cache, self.file_store)
 
     def integration_service(self) -> IntegrationService:
         return IntegrationService(
@@ -191,7 +195,21 @@ class Resources:
     def metrics_service(self) -> MetricsService:
         return MetricsService(self.uow_factory)
 
+    async def startup(self) -> None:
+        """Async setup after construction. A storage outage must not stop the API from serving
+        chats, so bucket creation failures are logged (uploads then fail with STORAGE_ERROR)."""
+        if self.file_store is not None:
+            try:
+                await self.file_store.ensure_bucket()
+            except StorageUnavailable as exc:
+                logger.error(
+                    "storage.bucket_unavailable",
+                    extra={"bucket": self.file_store.bucket, "error": str(exc)[:300]},
+                )
+
     async def aclose(self) -> None:
+        if self.file_store is not None:
+            await self.file_store.aclose()
         await self.engine.dispose()
 
 
@@ -206,6 +224,7 @@ def build_resources(
     embeddings_for: EmbeddingsFactory | None = None,
     adapters: dict[str, CapabilityAdapter] | None = None,
     metrics: AppMetrics | None = None,
+    file_store: FileStore | None = None,
 ) -> Resources:
     if settings.EMBEDDING_DIMENSIONS != EMBEDDING_DIMENSIONS:
         raise RuntimeError(
@@ -288,6 +307,7 @@ def build_resources(
         gateway=gateway,
         secret_store=FernetSecretStore(key),
         cache=CompanyContextCache(settings.COMPANY_CACHE_TTL_SECONDS),
+        file_store=file_store if file_store is not None else build_file_store(settings),
         metrics=metrics or AppMetrics(),
     )
     integrations = resources.integration_service()

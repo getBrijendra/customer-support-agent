@@ -121,6 +121,11 @@ class GuidelineVersion(Base):
     raw_text: Mapped[str] = mapped_column(Text, nullable=False)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Where the original uploaded bytes live (NULL when file storage is disabled / pre-0003 rows)
+    storage_backend: Mapped[str | None] = mapped_column(String(32))
+    storage_bucket: Mapped[str | None] = mapped_column(Text)
+    storage_key: Mapped[str | None] = mapped_column(Text)
+    content_type: Mapped[str | None] = mapped_column(Text)
     embedding_model: Mapped[str] = mapped_column(Text, nullable=False)
     embedding_dimensions: Mapped[int] = mapped_column(
         Integer, nullable=False, default=EMBEDDING_DIMENSIONS

@@ -101,6 +101,14 @@ class GuidelineVersionOut(BaseModel):
     source_format: str
     content_sha256: str
     byte_size: int
+    content_type: str | None = Field(default=None, description="Of the original upload")
+    storage_backend: str | None = Field(
+        default=None,
+        description="Where the original file is kept (`supabase`); null = not stored. "
+        "Download it from `GET .../guidelines/{n}/file`.",
+    )
+    storage_bucket: str | None = None
+    storage_key: str | None = None
     embedding_model: str
     embedding_dimensions: int
     compiler_model: str | None
