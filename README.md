@@ -138,10 +138,33 @@ variables are never sent. `X-API-Key` and other secret-like fields are scrubbed.
 lengths and hashes of customer text, but Sentry is still a third-party service.
 `SENTRY_TRACES_SAMPLE_RATE` (default `0`) turns on performance tracing.
 
+### Rate limiting (`POST /chats`)
+Chats are rate limited with the [`limits`](https://limits.readthedocs.io) library before any
+embedding or LLM work. Two levels are checked:
+- **per agent per company**: key `(company slug, API-key label)`, `CHAT_RATE_LIMIT_PER_AGENT` (default `20/minute`);
+- **per company**: all agents of one company together, `CHAT_RATE_LIMIT_PER_COMPANY` (default `300/minute`).
+
+Limits use `limits` notation, and several windows can be combined with `;` (e.g. `20/minute;300/hour`).
+An empty value turns that level off, and `RATE_LIMIT_ENABLED=false` turns it all off.
+An agent is identified by the **label** of their API key (`AGENT_API_KEYS=alice:key1,bob:key2`),
+so give each agent their own key; agents sharing a key share one quota.
+
+A rejected request gets `429 RATE_LIMITED` with `Retry-After` and `details.scope`
+(`agent` or `company`). It is **not** stored as a chat, but it counts in
+`chat_rate_limited_total{company,scope}`. Successful responses carry
+`X-RateLimit-Limit/Remaining/Reset` for the agent's tightest window.
+
+`RATE_LIMIT_STORAGE_URL=memory://` keeps counters per process, which is fine locally. With more than
+one process or replica, point it at Redis (`redis://…` or `rediss://…`) so all of them share the
+counters. If Redis is unreachable, chats are allowed and a `rate_limit.storage_error` warning is
+logged. Set `RATE_LIMIT_FAIL_OPEN=false` to reject them instead.
+`RATE_LIMIT_STRATEGY` can be `sliding-window-counter` (default), `moving-window` (exact, but more
+storage) or `fixed-window`.
+
 ### Production
 1. Copy `.env.prod.example`. Set `DATABASE_URL` (direct connection or session pooler, port 5432), `SECRETS_ENCRYPTION_KEY`, `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (original-file storage), and `OUTBOUND_ALLOW_PRIVATE_NETWORK=false`.
 2. Run `alembic upgrade head` against the hosted database as a release step.
-3. Deploy the `Dockerfile` image.
+3. Deploy the `Dockerfile` image. With more than one replica, set `RATE_LIMIT_STORAGE_URL` to a Redis URL.
 
 The API is stateless (all state, including the vector index, is in Postgres), so you can run
 several replicas. The hosted Postgres major version should match `supabase/config.toml`
@@ -236,6 +259,7 @@ Rules:
   - `tool_calls_total{capability,adapter,status}`
   - `tool_latency_seconds`
   - `proposed_actions_total{status}`
+  - `chat_rate_limited_total{company,scope}`
 - **Metrics summary and dashboard:** `/internal/metrics/summary` is computed in SQL and includes `routing` and `tools` blocks. `/internal/dashboard` renders it with Chart.js.
 
 ### Swapping the vector search

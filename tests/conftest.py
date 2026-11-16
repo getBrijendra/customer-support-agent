@@ -246,6 +246,8 @@ def make_settings(**overrides: Any) -> Settings:
         "SECRETS_ENCRYPTION_KEY": TEST_FERNET_KEY,
         "TOOL_TIMEOUT_SECONDS": 2,
         "LANGSMITH_TRACING": False,
+        # Off so suites that create many chats stay deterministic; rate-limit tests enable it.
+        "RATE_LIMIT_ENABLED": False,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)  # type: ignore[call-arg]

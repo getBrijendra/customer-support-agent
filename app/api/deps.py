@@ -12,6 +12,7 @@ from app.services.guidance_service import GuidanceService
 from app.services.ingestion_service import IngestionService
 from app.services.integration_service import IntegrationService
 from app.services.metrics_service import MetricsService
+from app.services.rate_limiter import ChatRateLimiter, DisabledRateLimiter
 from app.services.review_service import ReviewService
 
 
@@ -58,3 +59,7 @@ def action_service(request: Request) -> ActionService:
 
 def eval_service(request: Request) -> EvalService:
     return get_resources(request).eval_service()
+
+
+def chat_rate_limiter(request: Request) -> ChatRateLimiter | DisabledRateLimiter:
+    return get_resources(request).rate_limiter

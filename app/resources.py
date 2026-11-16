@@ -50,6 +50,7 @@ from app.services.guidance_service import GuidanceService
 from app.services.ingestion_service import IngestionService
 from app.services.integration_service import IntegrationService
 from app.services.metrics_service import MetricsService
+from app.services.rate_limiter import ChatRateLimiter, DisabledRateLimiter
 from app.services.review_service import ReviewService
 from app.storage.base import FileStore, StorageUnavailable
 from app.storage.factory import build_file_store
@@ -135,6 +136,7 @@ class Resources:
     cache: CompanyContextCache
     file_store: FileStore | None = None
     metrics: AppMetrics = field(default_factory=AppMetrics)
+    rate_limiter: ChatRateLimiter | DisabledRateLimiter = field(default_factory=DisabledRateLimiter)
     graph: Any = None
 
     @property
@@ -211,6 +213,21 @@ class Resources:
         if self.file_store is not None:
             await self.file_store.aclose()
         await self.engine.dispose()
+
+
+def build_rate_limiter(
+    settings: Settings, metrics: AppMetrics | None = None
+) -> ChatRateLimiter | DisabledRateLimiter:
+    if not settings.RATE_LIMIT_ENABLED:
+        return DisabledRateLimiter()
+    return ChatRateLimiter.from_url(
+        settings.RATE_LIMIT_STORAGE_URL,
+        per_agent=settings.CHAT_RATE_LIMIT_PER_AGENT,
+        per_company=settings.CHAT_RATE_LIMIT_PER_COMPANY,
+        strategy=settings.RATE_LIMIT_STRATEGY,
+        fail_open=settings.RATE_LIMIT_FAIL_OPEN,
+        metrics=metrics,
+    )
 
 
 def build_resources(
@@ -310,6 +327,7 @@ def build_resources(
         file_store=file_store if file_store is not None else build_file_store(settings),
         metrics=metrics or AppMetrics(),
     )
+    resources.rate_limiter = build_rate_limiter(settings, resources.metrics)
     integrations = resources.integration_service()
     resources.graph = build_graph(
         HarnessNodes(

@@ -153,3 +153,9 @@ class AppMetrics:
             ["status"],
             registry=self.registry,
         )
+        self.rate_limited = Counter(
+            "chat_rate_limited_total",
+            "Chat requests rejected by the rate limiter",
+            ["company", "scope"],
+            registry=self.registry,
+        )

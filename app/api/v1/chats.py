@@ -4,9 +4,15 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
-from app.api.deps import chat_history_service, eval_service, get_request_id, guidance_service
+from app.api.deps import (
+    chat_history_service,
+    chat_rate_limiter,
+    eval_service,
+    get_request_id,
+    guidance_service,
+)
 from app.core.security import Principal, require_agent
 from app.schemas.api import (
     SLUG_PATTERN,
@@ -22,6 +28,7 @@ from app.schemas.api import (
 from app.services.chat_history_service import ChatHistoryService
 from app.services.eval_service import EvalService
 from app.services.guidance_service import ChatRequestData, GuidanceService
+from app.services.rate_limiter import ChatRateLimiter, DisabledRateLimiter
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
@@ -35,20 +42,29 @@ router = APIRouter(prefix="/chats", tags=["chats"])
         "Routes the message to the company's playbook intents (several when needed), always "
         "applies company rules, retrieves reference facts, runs read-only lookups against bound "
         "company systems, and returns structured guidance plus proposed actions (writes) for the "
-        "agent to approve. Every attempt (success or failure) is stored."
+        "agent to approve. Every attempt (success or failure) is stored. Rate limited per "
+        "API key per company and per company overall (429 `RATE_LIMITED` with `Retry-After`; "
+        "rejected requests are not stored as chats)."
     ),
     responses={
         404: {"model": ErrorResponse},
+        429: {"model": ErrorResponse, "description": "RATE_LIMITED"},
         409: {"model": ErrorResponse, "description": "NO_ACTIVE_GUIDELINES"},
         502: {"model": ErrorResponse, "description": "LLM_ERROR"},
     },
 )
 async def create_chat(
     body: ChatCreate,
-    _: Principal = Depends(require_agent),
+    response: Response,
+    principal: Principal = Depends(require_agent),
     service: GuidanceService = Depends(guidance_service),
+    limiter: ChatRateLimiter | DisabledRateLimiter = Depends(chat_rate_limiter),
     request_id: str | None = Depends(get_request_id),
 ) -> ChatCreated:
+    # Before any embedding/LLM work, so a rejected request costs nothing.
+    limit_status = await limiter.check_chat(body.company, principal.label)
+    if limit_status is not None:
+        response.headers.update(limit_status.headers())
     outcome = await service.handle(
         ChatRequestData(
             company=body.company,

@@ -22,6 +22,7 @@ class DomainError(Exception):
     def __init__(self, message: str | None = None, *, details: Any = None) -> None:
         self.message = message or self.default_message
         self.details = details
+        self.headers: dict[str, str] | None = None
         super().__init__(self.message)
 
 
@@ -143,6 +144,17 @@ class SecretsUnavailable(DomainError):
     default_message = "SECRETS_ENCRYPTION_KEY is not configured"
 
 
+class RateLimited(DomainError):
+    code, status_code, default_message = "RATE_LIMITED", 429, "Too many requests"
+
+    def __init__(
+        self, message: str | None = None, *, retry_after: int, details: Any = None
+    ) -> None:
+        super().__init__(message, details=details)
+        self.retry_after = retry_after
+        self.headers = {"Retry-After": str(retry_after)}
+
+
 class ValidationFailed(DomainError):
     code, status_code, default_message = "VALIDATION_ERROR", 422, "Invalid request"
 
@@ -172,7 +184,9 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def _domain(_: Request, exc: DomainError) -> JSONResponse:
         return JSONResponse(
-            error_body(exc.code, exc.message, exc.details), status_code=exc.status_code
+            error_body(exc.code, exc.message, exc.details),
+            status_code=exc.status_code,
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)

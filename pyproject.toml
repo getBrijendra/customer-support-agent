@@ -12,6 +12,7 @@ dependencies = [
     "langchain-core>=1.7.7",
     "langchain-google-genai>=4.4.3",
     "langgraph>=1.2.20",
+    "limits[async-redis]>=5.8.0",
     "mcp>=2.3.0",
     "pgvector>=0.5.1",
     "prometheus-client>=0.26.0",

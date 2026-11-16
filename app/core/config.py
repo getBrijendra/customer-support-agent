@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -126,9 +126,35 @@ class Settings(BaseSettings):
     AGENT_API_KEYS: str = ""
     ADMIN_API_KEYS: str = ""
 
+    # --- Rate limiting (POST /chats) -------------------------------------------
+    # Storage: `memory://` (per process; local/tests) or `redis://host:6379/0` / `rediss://...`
+    # (shared by all replicas; needed in production when running more than one process).
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_STORAGE_URL: str = "memory://"
+    RATE_LIMIT_STRATEGY: Literal["sliding-window-counter", "moving-window", "fixed-window"] = (
+        "sliding-window-counter"
+    )
+    # `limits` notation, `;`-separated for several windows, e.g. "20/minute;300/hour".
+    # An empty string disables that level.
+    CHAT_RATE_LIMIT_PER_AGENT: str = "20/minute"  # per API-key label per company slug
+    CHAT_RATE_LIMIT_PER_COMPANY: str = "300/minute"  # all agents of one company together
+    RATE_LIMIT_FAIL_OPEN: bool = True  # allow chats when the limiter storage is unreachable
+
     # --- Misc -----------------------------------------------------------------
     LOG_LEVEL: str = "INFO"
     COMPANY_CACHE_TTL_SECONDS: float = 30.0
+
+    @field_validator("CHAT_RATE_LIMIT_PER_AGENT", "CHAT_RATE_LIMIT_PER_COMPANY")
+    @classmethod
+    def _valid_rate_limit(cls, value: str) -> str:
+        from limits import parse_many
+
+        if value.strip():
+            try:
+                parse_many(value)
+            except ValueError as exc:
+                raise ValueError(f"invalid rate limit {value!r}: {exc}") from exc
+        return value
 
     @property
     def agent_keys(self) -> list[ApiKey]:
