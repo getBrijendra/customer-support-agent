@@ -112,6 +112,16 @@ class Settings(BaseSettings):
     LANGSMITH_API_KEY: SecretStr | None = None
     LANGSMITH_PROJECT: str | None = None
 
+    # --- Optional Sentry error reporting + log capture (off unless DSN set) ---
+    SENTRY_DSN: SecretStr | None = None
+    SENTRY_ENVIRONMENT: str | None = None  # defaults to APP_ENV
+    SENTRY_RELEASE: str | None = None
+    SENTRY_TRACES_SAMPLE_RATE: float = Field(default=0.0, ge=0, le=1)
+    SENTRY_LOG_EVENT_LEVEL: str = "ERROR"  # log records at/above this become Sentry issues
+    SENTRY_LOG_BREADCRUMB_LEVEL: str = "INFO"  # ...and these are attached as breadcrumbs
+    SENTRY_ENABLE_LOGS: bool = False  # also ship records to Sentry Logs
+    SENTRY_LOGS_LEVEL: str = "INFO"  # minimum level sent to Sentry Logs
+
     # --- Auth -----------------------------------------------------------------
     AGENT_API_KEYS: str = ""
     ADMIN_API_KEYS: str = ""

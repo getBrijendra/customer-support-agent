@@ -24,6 +24,7 @@ from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestContextMiddleware
 from app.core.security import require_admin
+from app.core.sentry import init_sentry
 from app.resources import build_resources
 from app.services.common import AppMetrics
 
@@ -56,6 +57,7 @@ def create_app(settings: Settings | None = None, **overrides: Any) -> FastAPI:
     tool_model, embeddings_for, adapters) — tests inject deterministic fakes this way."""
     settings = settings or get_settings()
     configure_logging(settings.LOG_LEVEL)
+    init_sentry(settings)
     metrics = AppMetrics()
 
     @asynccontextmanager
