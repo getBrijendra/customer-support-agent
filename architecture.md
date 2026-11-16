@@ -39,6 +39,7 @@ flowchart LR
 
     prom["Prometheus"]
     ls["LangSmith<br/>(optional, off by default)"]
+    redis[("Redis<br/>rate-limit counters<br/>(prod; memory:// locally)")]
 
     agent -- "chats, actions, feedback" --> api
     admin -- "companies, guidelines, integrations, evals, metrics" --> api
@@ -49,6 +50,7 @@ flowchart LR
     api -- "parameterized SELECT" --> db
     prom -- "scrape /metrics" --> api
     api -.-> ls
+    api -- "POST /chats quota hits" --> redis
 ```
 
 ---
@@ -64,7 +66,7 @@ flowchart TB
     end
 
     subgraph SVC["services"]
-        s1[company] --- s2[ingestion] --- s3[review] --- s4[guidance] --- s5[action] --- s6[integration] --- s7[eval] --- s8[metrics] --- s9[chat_history]
+        s1[company] --- s2[ingestion] --- s3[review] --- s4[guidance] --- s5[action] --- s6[integration] --- s7[eval] --- s8[metrics] --- s9[chat_history] --- s10["rate_limiter (limits)"]
     end
 
     subgraph HARNESS["harness (LangGraph)"]
@@ -231,6 +233,7 @@ sequenceDiagram
     autonumber
     actor Agent as Support agent
     participant API as FastAPI + GuidanceService
+    participant RL as Rate limiter (Redis / memory)
     participant G as Harness (LangGraph)
     participant E as Embeddings
     participant S as SearchGateway (pgvector)
@@ -241,6 +244,12 @@ sequenceDiagram
     participant DB as Postgres
 
     Agent->>API: POST /chats {company, message, notes}
+    API->>RL: check_chat(company slug, API-key label)
+    alt company or agent quota exhausted
+        RL-->>API: RateLimited
+        API-->>Agent: 429 RATE_LIMITED + Retry-After (no chat row, no LLM call)
+    end
+    RL-->>API: ok + remaining (X-RateLimit-* headers)
     API->>DB: company + active version + rules + live bindings (30s cache)
     API->>G: ainvoke(state, recursion_limit)
     G->>E: load_context: embed message once
@@ -282,6 +291,21 @@ sequenceDiagram
     API->>DB: action executed / failed + tool_calls row
     API-->>Agent: 200 action (approving again returns the same result)
 ```
+
+### Rate limiting
+`POST /chats` is the expensive endpoint (embeddings, two LLM calls, tool calls), so the router checks quotas with the [`limits`](https://limits.readthedocs.io) library (`services/rate_limiter.py`) **after** auth and body validation and **before** the service runs. The company slug is in the JSON body, so this can't be done in middleware.
+
+| Level | Key | Default | Purpose |
+|---|---|---|---|
+| Per agent per company | `("chat", "agent", slug, API-key label)` | `CHAT_RATE_LIMIT_PER_AGENT=20/minute` | One agent or script can't flood a tenant |
+| Per company | `("chat", "company", slug)` | `CHAT_RATE_LIMIT_PER_COMPANY=300/minute` | Caps one tenant's total LLM spend |
+
+- The company quota is tested first, then the agent quota is hit, then the company quota. A request rejected at one level doesn't use up quota at the other.
+- Strategy: sliding-window counter by default (`moving-window` and `fixed-window` can be configured). Several windows per level are allowed (`20/minute;300/hour`).
+- Rejected requests get `429 RATE_LIMITED`, `Retry-After` and `details.scope`. They aren't stored as chats but count in `chat_rate_limited_total{company,scope}`.
+- Storage: `memory://` per process (local, tests), Redis in production so all replicas share counters.
+- If Redis is unreachable, chats are allowed (`RATE_LIMIT_FAIL_OPEN=true`) and a warning is logged.
+- An agent is identified by the label of their API key, so agents sharing a key share one quota.
 
 ---
 
@@ -515,10 +539,12 @@ flowchart LR
         lb --> a2["API replica"]
         a1 --> hs[("Hosted Supabase<br/>session pooler / direct :5432")]
         a2 --> hs
+        a1 --> rd[("Redis<br/>rate-limit counters")]
+        a2 --> rd
     end
 ```
 
-The API process is stateless (all state lives in Postgres), so it scales horizontally. Only env vars differ between environments.
+The API process is stateless (all durable state lives in Postgres, shared rate-limit counters in Redis), so it scales horizontally. Locally the limiter uses in-process memory and needs no Redis. Only env vars differ between environments.
 
 ---
 
@@ -549,6 +575,7 @@ The API process is stateless (all state lives in Postgres), so it scales horizon
 | 21 | **Secrets encrypted (Fernet) behind `SecretStore`; injected at call time** | Credentials never reach prompts, logs or the audit table | Plaintext config | Key management via env var until KMS/Vault |
 | 22 | **Everything external is untrusted data** | Customer messages, guidelines and tool output are all delimited and can't change instructions (prompt-injection defence) | — | Prompt is a bit more verbose |
 | 23 | **LangSmith tracing off by default** | Tracing would send customer messages and tool data to a third party | Always on | Opt-in through env vars when debugging |
+| 24 | **Chat rate limits per agent per company and per company, using `limits` in the router; Redis in production** | The company slug is in the body, so the check runs after parsing and before any LLM spend. `limits` has async storage, several algorithms and swappable backends (memory locally, Redis shared across replicas). | slowapi (key function only sees the request, not the body); fastapi-limiter (Redis only); gateway/edge limits (can't see company or agent); a Postgres counter table | Adds Redis in production. Fails open on Redis errors, so limits can lapse during an outage. "Agent" means API-key label. |
 
 ### Out of scope (future work)
 Multi-turn threads, SSO/RBAC, a queue worker, multilingual messages, PDF/DOCX/OCR parsers (the interface exists), native OAuth connectors (Shopify, Stripe, Zendesk) and OpenAPI import, KMS/Vault, per-company tool rate limits, cross-encoder re-ranking, LLM-judge reply evals, partitioning by company, streaming responses.
