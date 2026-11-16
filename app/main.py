@@ -62,6 +62,7 @@ def create_app(settings: Settings | None = None, **overrides: Any) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         resources = build_resources(settings, metrics=metrics, **overrides)
         app.state.resources = resources
+        await resources.startup()
         logger.info(
             "app.started",
             extra={

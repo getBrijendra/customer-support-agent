@@ -89,6 +89,7 @@ async def upload_guidelines(
         notes=notes,
         uploaded_by=principal.label,
         activate=activate,
+        content_type=file.content_type,
     )
     version_id = created.version.id
     if settings.INGESTION_SYNC:
@@ -141,6 +142,38 @@ async def get_guideline_version(
 ) -> GuidelineVersionOut:
     company, version = await service.get_version(slug, version_number)
     return GuidelineVersionOut.build(version, company=company, include_text=include_text)
+
+
+@router.get(
+    "/{version_number}/file",
+    summary="Download the original uploaded file",
+    description=(
+        "Returns the exact bytes that were uploaded, from object storage (Supabase Storage). "
+        "404 `FILE_NOT_STORED` when file storage was disabled at upload time; 502 "
+        "`STORAGE_ERROR` when the storage backend is unreachable."
+    ),
+    response_class=Response,
+    responses={
+        200: {"content": {"text/plain": {}, "application/octet-stream": {}}},
+        **E404,
+        502: {"model": ErrorResponse},
+    },
+)
+async def download_guideline_file(
+    slug: str = SlugPath,
+    version_number: int = VersionPath,
+    _: Principal = Depends(require_agent),
+    service: IngestionService = Depends(ingestion_service),
+) -> Response:
+    original = await service.get_original_file(slug, version_number)
+    return Response(
+        content=original.data,
+        media_type=original.content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{original.file_name}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get(

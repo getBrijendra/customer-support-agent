@@ -29,7 +29,7 @@ See [architecture.md](architecture.md) for diagrams and the key decisions, and
 ## First-time local setup
 
 1. Install Docker and the Supabase CLI (`brew install supabase/tap/supabase`, the official binary, or `npx supabase`; the Makefile falls back to `npx`). Then run `uv sync`.
-2. Run `cp .env.example .env`. Add `GOOGLE_API_KEY`, your own `AGENT_API_KEYS` / `ADMIN_API_KEYS`, and a `SECRETS_ENCRYPTION_KEY` (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
+2. Run `cp .env.example .env`. Add `GOOGLE_API_KEY`, your own `AGENT_API_KEYS` / `ADMIN_API_KEYS`, and a `SECRETS_ENCRYPTION_KEY` (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`). After step 3, also set `SUPABASE_SERVICE_ROLE_KEY` to the **Secret** key from `supabase status` (or set `GUIDELINE_STORAGE_BACKEND=none`).
 3. Run `make db-up`, then confirm the DB URL with `supabase status`.
 4. Run `make migrate && make seed`.
 5. Run `make run` and open <http://127.0.0.1:8000/docs>.
@@ -80,6 +80,7 @@ playbook. Run `make migrate && make seed` (or re-upload your guidelines) after u
 | `TOOLS_ENABLED`, `AGENT_MAX_STEPS`, `TOOL_TIMEOUT_SECONDS`, `AGENT_TOTAL_TIMEOUT_SECONDS` | Limits for the tool loop. |
 | `SECRETS_ENCRYPTION_KEY` | Fernet key for company secrets (MCP tokens, API keys, DSNs). |
 | `OUTBOUND_ALLOW_PRIVATE_NETWORK` | SSRF guard for HTTP/MCP URLs. `true` locally, **`false` in prod**. |
+| `GUIDELINE_STORAGE_BACKEND`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GUIDELINE_STORAGE_BUCKET` | Where original uploaded files are kept. See *Original guideline files* below. |
 | `LANGSMITH_TRACING` | **Off by default.** See the warning below. |
 
 ### Supabase connection pooler
@@ -95,6 +96,24 @@ Local and hosted Supabase both ship the `vector` extension, and migration `0002`
 rows for small tenants. This needs **pgvector ≥ 0.8**; local Supabase ships 0.8.2, which you
 can check with `SELECT extversion FROM pg_extension WHERE extname='vector'`.
 
+### Original guideline files (Supabase Storage)
+Compilation always works from the decoded text in `guideline_versions.raw_text`. In addition,
+with `GUIDELINE_STORAGE_BACKEND=supabase`, the **exact uploaded bytes** are written to a
+**private** Supabase Storage bucket (`GUIDELINE_STORAGE_BUCKET`, default `guideline-files`,
+created by the app at startup) under `<company_id>/<version_id>/<file name>`. The version row
+records `storage_backend`, `storage_bucket`, `storage_key` and `content_type`, and
+`GET /companies/{slug}/guidelines/{n}/file` downloads the original.
+
+- The upload to storage happens before the version row commits. If storage is unreachable, the
+  upload fails with `502 STORAGE_ERROR` and no version is created.
+- Deleting a version also deletes its file (best effort; a failure is logged, not raised).
+- The app uses the service-role / `sb_secret_` key over the Storage REST API, so the bucket
+  needs no RLS policies. Keep that key server-side only.
+- Versions uploaded before migration `0003`, or while storage was `none`, have no stored file
+  (`404 FILE_NOT_STORED`); their text is still available with `?include_text=true`.
+- In Docker, use `SUPABASE_URL=http://host.docker.internal:55421`.
+- Another backend (S3, GCS) means a new `FileStore` implementation in `app/storage/`.
+
 ### Schema ownership: Alembic only
 Alembic (`migrations/`) is the single source of truth for the schema, both locally and in
 production. Never add tables via `supabase/migrations/` or Studio. `supabase/` holds only
@@ -107,7 +126,7 @@ Only enable it for debugging with non-sensitive data. Logs, Prometheus metrics a
 `tool_calls` audit table already give you a full trace without it.
 
 ### Production
-1. Copy `.env.prod.example`. Set `DATABASE_URL` (direct connection or session pooler, port 5432), `SECRETS_ENCRYPTION_KEY`, and `OUTBOUND_ALLOW_PRIVATE_NETWORK=false`.
+1. Copy `.env.prod.example`. Set `DATABASE_URL` (direct connection or session pooler, port 5432), `SECRETS_ENCRYPTION_KEY`, `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (original-file storage), and `OUTBOUND_ALLOW_PRIVATE_NETWORK=false`.
 2. Run `alembic upgrade head` against the hosted database as a release step.
 3. Deploy the `Dockerfile` image.
 
@@ -238,6 +257,7 @@ curl -X POST $API/companies/bookshop/guidelines -H "$ADMIN" \
 curl $API/companies/bookshop/guidelines -H "$AGENT"
 curl $API/companies/bookshop/guidelines/active -H "$AGENT"
 curl "$API/companies/bookshop/guidelines/2?include_text=true" -H "$AGENT"
+curl -OJ $API/companies/bookshop/guidelines/2/file -H "$AGENT"           # original upload
 curl $API/companies/bookshop/guidelines/2/playbook -H "$AGENT"            # intents, rules, facts
 curl $API/companies/bookshop/guidelines/2/capability-coverage -H "$ADMIN" # live vs manual
 curl -X POST $API/companies/bookshop/guidelines/2/approve -H "$ADMIN" -H "$JSON" -d '{"note":"ok"}'

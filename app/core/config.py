@@ -83,6 +83,19 @@ class Settings(BaseSettings):
     AUTO_APPROVE_GUIDELINES: bool = True
     AUTO_APPROVE_MIN_ROUTING_TOP1: float = Field(default=0.8, ge=0, le=1)
 
+    # --- Original-file storage ------------------------------------------------
+    # `supabase`: keep the uploaded bytes in a private Supabase Storage bucket.
+    # `none`: keep only the decoded text in Postgres. `memory`: tests / offline demos.
+    GUIDELINE_STORAGE_BACKEND: Literal["none", "supabase", "memory"] = "none"
+    SUPABASE_URL: str | None = (
+        None  # API URL from `supabase status` (local: http://127.0.0.1:55421)
+    )
+    SUPABASE_SERVICE_ROLE_KEY: SecretStr | None = None  # service_role / sb_secret_ key; server only
+    GUIDELINE_STORAGE_BUCKET: str = Field(
+        default="guideline-files", pattern=r"^[a-z0-9][a-z0-9._-]{1,62}$"
+    )
+    STORAGE_TIMEOUT_SECONDS: float = 30
+
     # --- Tools / capabilities -------------------------------------------------
     TOOLS_ENABLED: bool = True
     AGENT_MAX_STEPS: int = Field(default=4, ge=0, le=20)

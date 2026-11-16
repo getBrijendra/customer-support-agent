@@ -144,6 +144,7 @@ def client_factory(
         tool_model: Any = None,
         adapters: Any = None,
         compiler: Any = None,
+        file_store: Any = None,
         **settings_overrides: Any,
     ) -> AsyncIterator[httpx.AsyncClient]:
         settings = make_settings(DATABASE_URL=pg_url, **settings_overrides)
@@ -156,6 +157,7 @@ def client_factory(
             tool_model=tool_model,
             embeddings_for=fake_embeddings,
             adapters=adapters,
+            file_store=file_store,
         )
         async with running_client(app) as client:
             client.app = app  # type: ignore[attr-defined]

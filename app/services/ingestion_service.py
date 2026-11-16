@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import mimetypes
 import time
 import uuid
 from collections.abc import Callable
@@ -26,9 +27,11 @@ from app.core.config import Settings
 from app.core.errors import (
     CompanyNotFound,
     DuplicateGuidelines,
+    FileNotStored,
     FileTooLarge,
     InvalidFile,
     NoActiveGuidelines,
+    StorageError,
     VersionNotFound,
 )
 from app.core.logging import get_logger
@@ -51,6 +54,13 @@ from app.services.common import AppMetrics, CompanyContextCache, UnitOfWork, Uow
 from app.services.eval_metrics import ApprovalDecision, decide_approval
 from app.services.eval_service import EvalService
 from app.services.review_service import activate_if_latest
+from app.storage.base import (
+    FileStore,
+    StorageUnavailable,
+    StoredObjectNotFound,
+    guideline_object_key,
+    safe_file_name,
+)
 
 logger = get_logger(__name__)
 
@@ -99,6 +109,22 @@ def sha256_hex(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def stored_content_type(filename: str | None, declared: str | None) -> str:
+    """Content type recorded for the original file. No charset is added: the bytes are stored
+    exactly as uploaded (UTF-8 or Latin-1), so we don't claim an encoding."""
+    if declared and "/" in declared and not declared.startswith("application/octet-stream"):
+        return declared.split(";", 1)[0].strip().lower()
+    guessed = mimetypes.guess_type(filename or "")[0]
+    return guessed or "application/octet-stream"
+
+
+@dataclass
+class OriginalFile:
+    file_name: str
+    content_type: str
+    data: bytes
+
+
 @dataclass
 class CreatedVersion:
     version: GuidelineVersion
@@ -131,6 +157,7 @@ class IngestionService:
         examples: ExampleGenerator,
         embeddings_for: Callable[[str], Embeddings],
         evals: EvalService,
+        file_store: FileStore | None = None,
     ) -> None:
         self._uow = uow_factory
         self._settings = settings
@@ -140,6 +167,7 @@ class IngestionService:
         self._examples = examples
         self._embeddings_for = embeddings_for
         self._evals = evals
+        self._files = file_store
 
     # ------------------------------------------------------------------ upload
     async def create_version(
@@ -151,17 +179,21 @@ class IngestionService:
         notes: str | None,
         uploaded_by: str | None,
         activate: bool = True,
+        content_type: str | None = None,
     ) -> CreatedVersion:
         text = validate_upload(
             filename, content, self._settings.MAX_UPLOAD_BYTES, self._settings.supported_formats
         )
         digest = sha256_hex(content)
+        # Generated once, so a retried allocation re-uses the same storage key (upsert).
+        version_id = uuid.uuid4()
         last_exc: Exception | None = None
         for _attempt in range(2):
             async with self._uow() as uow:
                 try:
                     return await self._allocate(
                         uow,
+                        version_id,
                         slug,
                         filename or "",
                         text,
@@ -170,6 +202,7 @@ class IngestionService:
                         notes,
                         uploaded_by,
                         activate,
+                        stored_content_type(filename, content_type),
                     )
                 except IntegrityError as exc:  # lost a version-number race; retry once
                     await uow.rollback()
@@ -179,6 +212,7 @@ class IngestionService:
     async def _allocate(
         self,
         uow: UnitOfWork,
+        version_id: uuid.UUID,
         slug: str,
         filename: str,
         text: str,
@@ -187,6 +221,7 @@ class IngestionService:
         notes: str | None,
         uploaded_by: str | None,
         activate: bool,
+        content_type: str,
     ) -> CreatedVersion:
         # Row lock on the company serialises version allocation for that company.
         company: Company | None = await uow.companies.get_by_slug_for_update(slug)
@@ -210,8 +245,11 @@ class IngestionService:
                 "version instead of re-uploading."
             )
         number: int = await uow.versions.next_version_number(company.id)
+        storage_key = await self._store_original(
+            company.id, version_id, filename, content, content_type
+        )
         version = GuidelineVersion(
-            id=uuid.uuid4(),
+            id=version_id,
             company_id=company.id,
             version_number=number,
             status=VersionStatus.PROCESSING,
@@ -222,19 +260,93 @@ class IngestionService:
             raw_text=text,
             content_sha256=digest,
             byte_size=len(content),
+            storage_backend=self._files.backend if storage_key and self._files else None,
+            storage_bucket=self._files.bucket if storage_key and self._files else None,
+            storage_key=storage_key,
+            content_type=content_type,
             embedding_model=self._settings.EMBEDDING_MODEL,
             embedding_dimensions=self._settings.EMBEDDING_DIMENSIONS,
             notes=notes,
             uploaded_by=uploaded_by,
             created_at=utcnow(),
         )
-        await uow.versions.add(version)
-        await uow.commit()
+        try:
+            await uow.versions.add(version)
+            await uow.commit()
+        except BaseException:
+            if storage_key:  # don't leave an object behind for a version that doesn't exist
+                await self._delete_object(storage_key)
+            raise
         logger.info(
             "ingestion.started",
-            extra={"company": slug, "version": number, "bytes": len(content)},
+            extra={
+                "company": slug,
+                "version": number,
+                "bytes": len(content),
+                "stored": storage_key is not None,
+            },
         )
         return CreatedVersion(version=version, company_slug=slug, info=info)
+
+    # -------------------------------------------------------- original files
+    async def _store_original(
+        self,
+        company_id: uuid.UUID,
+        version_id: uuid.UUID,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> str | None:
+        """Upload the exact uploaded bytes. Runs inside the allocation transaction, before the
+        version row commits, so a storage failure means no version is created."""
+        if self._files is None:
+            return None
+        key = guideline_object_key(company_id, version_id, filename)
+        started = time.perf_counter()
+        try:
+            await self._files.put(key, content, content_type)
+        except StorageUnavailable as exc:
+            logger.error(
+                "storage.upload_failed",
+                extra={"backend": self._files.backend, "error": str(exc)[:300]},
+            )
+            raise StorageError("Could not store the original guideline file") from exc
+        logger.info(
+            "storage.uploaded",
+            extra={
+                "backend": self._files.backend,
+                "bucket": self._files.bucket,
+                "bytes": len(content),
+                "duration_ms": int((time.perf_counter() - started) * 1000),
+            },
+        )
+        return key
+
+    async def _delete_object(self, key: str) -> None:
+        if self._files is None:
+            return
+        try:
+            await self._files.delete(key)
+        except StorageUnavailable as exc:
+            logger.warning("storage.delete_failed", extra={"error": str(exc)[:300]})
+
+    async def get_original_file(self, slug: str, number: int) -> OriginalFile:
+        _, version = await self.get_version(slug, number)
+        if not version.storage_key:
+            raise FileNotStored(f"The original file of v{number} was not stored")
+        if self._files is None or version.storage_bucket != self._files.bucket:
+            raise StorageError("The storage bucket holding this file is not configured")
+        try:
+            obj = await self._files.get(version.storage_key)
+        except StoredObjectNotFound:
+            raise FileNotStored(f"The original file of v{number} is missing from storage") from None
+        except StorageUnavailable as exc:
+            raise StorageError("Could not read the original guideline file") from exc
+        return OriginalFile(
+            file_name=safe_file_name(version.file_name),
+            content_type=version.content_type or obj.content_type,
+            data=obj.data,
+        )
 
     # ------------------------------------------------------------- pipeline
     async def run_ingestion(self, version_id: uuid.UUID) -> GuidelineVersion | None:
