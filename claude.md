@@ -475,7 +475,7 @@ class GuidanceOutput(BaseModel):
 ```
 `performed_by`: `ai` = say/ask folded into the reply; `ai_verified` = a lookup the harness ran (with `tool_call_id`); `needs_approval` = a write proposed as an action; `agent` = unbound/failed/timed-out lookups and actions, and escalations.
 
-### Prompt rules (`ai/prompts.py`: `PROMPT_VERSION="v2"`, `ROUTER_PROMPT_VERSION="v1"`, `COMPILE_PROMPT_VERSION="v1"`)
+### Prompt rules (`ai/prompts.py`: `PROMPT_VERSION="v3"`, `ROUTER_PROMPT_VERSION="v1"`, `COMPILE_PROMPT_VERSION="v1"`)
 The generator system prompt must:
 - act as an assistant to a **support agent** (not the customer) for `{company_name}`;
 - always follow `<company_rules>` (greeting, sign-off, tone, prohibitions);

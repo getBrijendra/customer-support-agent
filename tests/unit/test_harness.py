@@ -242,7 +242,7 @@ async def test_single_intent_success_and_gating() -> None:
     assert chat.references and chat.references["dropped"] == ["made-up:9999"]
     assert chat.input_tokens == 120 and chat.router_input_tokens == 30
     assert chat.latency_ms_routing is not None and chat.latency_ms_llm is not None
-    assert chat.prompt_version == "v2" and chat.request_id == "rid-1"
+    assert chat.prompt_version == "v3" and chat.request_id == "rid-1"
     assert chat.guideline_version_number == 3
 
 
