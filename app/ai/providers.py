@@ -6,6 +6,9 @@ Adding another provider (OpenAI, Anthropic, ...) means one new branch in each fa
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import math
+import re
 import threading
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -19,6 +22,35 @@ from pydantic import BaseModel
 from app.core.config import Settings
 
 Role = Literal["generator", "compiler", "router"]
+_TOKEN = re.compile(r"[a-z0-9]+")
+
+
+class DeterministicHashEmbeddings(Embeddings):
+    """Small offline embedding based on hashed lexical features.
+
+    It is intentionally simple, but unlike random test vectors it gives related texts overlapping
+    dimensions, which makes local pgvector routing predictable enough for development demos.
+    """
+
+    def __init__(self, size: int) -> None:
+        self.size = size
+
+    def _embed(self, text: str) -> list[float]:
+        vector = [0.0] * self.size
+        tokens = _TOKEN.findall(text.lower())
+        features = [*tokens, *(token[:5] for token in tokens if len(token) > 5)]
+        for feature in features:
+            digest = hashlib.sha256(feature.encode()).digest()
+            index = int.from_bytes(digest[:8], "big") % self.size
+            vector[index] += 1.0
+        norm = math.sqrt(sum(value * value for value in vector))
+        return [value / norm for value in vector] if norm else vector
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed(text)
 
 
 class LLMCallError(Exception):
@@ -52,6 +84,8 @@ def get_chat_model(settings: Settings, role: Role = "generator") -> BaseChatMode
 
 
 def get_embeddings(settings: Settings, model: str | None = None) -> Embeddings:
+    if settings.LLM_PROVIDER == "fake":
+        return DeterministicHashEmbeddings(size=settings.EMBEDDING_DIMENSIONS)
     if settings.LLM_PROVIDER == "google":
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
 

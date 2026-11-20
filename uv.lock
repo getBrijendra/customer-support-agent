@@ -2297,7 +2297,6 @@ dependencies = [
     { name = "httpx" },
     { name = "jinja2" },
     { name = "langchain-core" },
-    { name = "langchain-google-genai" },
     { name = "langgraph" },
     { name = "limits", extra = ["async-redis"] },
     { name = "mcp" },
@@ -2310,6 +2309,11 @@ dependencies = [
     { name = "sentry-sdk", extra = ["fastapi"] },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+google = [
+    { name = "langchain-google-genai" },
 ]
 
 [package.dev-dependencies]
@@ -2332,7 +2336,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "langchain-core", specifier = ">=1.7.7" },
-    { name = "langchain-google-genai", specifier = ">=4.4.3" },
+    { name = "langchain-google-genai", marker = "extra == 'google'", specifier = ">=4.4.3" },
     { name = "langgraph", specifier = ">=1.2.20" },
     { name = "limits", extras = ["async-redis"], specifier = ">=5.8.0" },
     { name = "mcp", specifier = ">=2.3.0" },
@@ -2346,6 +2350,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.1.8" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]
+provides-extras = ["google"]
 
 [package.metadata.requires-dev]
 dev = [

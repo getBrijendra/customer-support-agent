@@ -1,8 +1,9 @@
-"""Deterministic, offline implementations of the compiler, example generator and router.
+"""Deterministic, offline implementations of every AI collaborator used by local development.
 
-Used by the test suite (no Gemini key) and by `scripts/seed.py --fake-compiler`. They understand
-the "N. Title / Approach to solve: / - bullets / Sample reply:" layout of the seed guidelines,
-plus TONE/RULES and REFERENCE/FACTS sections.
+The compiler understands the "N. Title / Approach to solve: / - bullets / Sample reply:" layout
+of the seed guidelines, plus TONE/RULES and REFERENCE/FACTS sections. The router and generator
+are deliberately simple and predictable; they are a functional demo path, not quality substitutes
+for production models.
 """
 
 from __future__ import annotations
@@ -10,7 +11,9 @@ from __future__ import annotations
 import re
 
 from app.ai.compiler import CompileResult
+from app.ai.context import GuidanceContext
 from app.ai.examples import ExampleResult
+from app.ai.guidance_chain import GenerationResult
 from app.ai.router import SelectionResult, sanitize_selection
 from app.ai.schemas import (
     CompiledFact,
@@ -20,8 +23,11 @@ from app.ai.schemas import (
     CompiledStep,
     Entity,
     ExampleSet,
+    GuidanceOutput,
     IntentExamples,
+    IntentGuidance,
     IntentSelection,
+    PlanStep,
     SectionMapping,
     SelectedIntent,
     to_key,
@@ -257,14 +263,103 @@ class HeuristicIntentSelector:
         candidates: list[IntentCandidate],
         max_intents: int,
     ) -> SelectionResult:
-        picked = [
-            SelectedIntent(key=c.key, confidence="medium")
-            for c in candidates[:1]
-            if c.text_score or (c.vector_score or 0) >= self._min
-        ]
+        text_matches = [candidate for candidate in candidates if candidate.text_score]
+        best = (
+            max(text_matches, key=lambda candidate: candidate.text_score or 0)
+            if text_matches
+            else (candidates[0] if candidates else None)
+        )
+        picked = []
+        if best is not None and (best.text_score or (best.vector_score or 0) >= self._min):
+            picked.append(SelectedIntent(key=best.key, confidence="medium"))
         sel = IntentSelection(
             intents=picked,
             no_match=not picked,
             entities=extract_entities(customer_message, agent_notes),
         )
         return SelectionResult(sanitize_selection(sel, candidates, max_intents), self.model_name)
+
+
+class HeuristicGuidanceGenerator:
+    """Build deterministic, guideline-grounded output without an external model call."""
+
+    model_name = "heuristic-generator"
+
+    async def generate(
+        self,
+        *,
+        context: GuidanceContext,
+        customer_message: str,
+        agent_notes: str | None,
+        channel: str | None,
+    ) -> GenerationResult:
+        del customer_message, agent_notes, channel
+        detected: list[IntentGuidance] = []
+        missing: list[str] = []
+        references: list[str] = []
+        needs_escalation = context.no_match
+
+        for playbook in context.playbooks:
+            steps = []
+            intent_missing = []
+            for step in playbook.steps:
+                step_ref = f"{playbook.key}#{step['step_id']}"
+                steps.append(
+                    PlanStep(
+                        step_ref=step_ref,
+                        type=step["type"],
+                        instruction=step["text"],
+                        performed_by="agent",
+                    )
+                )
+                references.append(f"intent:{step_ref}")
+                if step["type"] == "ask":
+                    intent_missing.append(step["text"])
+                if step["type"] == "escalate":
+                    needs_escalation = True
+            missing.extend(intent_missing)
+            detected.append(
+                IntentGuidance(
+                    intent_key=playbook.key,
+                    confidence=playbook.confidence,
+                    steps=steps,
+                    missing_information=intent_missing,
+                )
+            )
+
+        references.extend(f.ref for f in context.facts)
+        references.extend(s.ref for s in context.sections)
+        references.extend(t.ref for t in context.tool_results if t.status == "ok")
+        topics = ", ".join(p.name for p in context.playbooks)
+        if context.no_match or not topics:
+            response = (
+                "Hello,\n\nThank you for contacting us. I could not match this request to a "
+                "specific support guideline, so I am sending it for manual review.\n\n"
+                f"Best regards,\n{context.company_name} Support"
+            )
+        else:
+            response = (
+                f"Hello,\n\nThank you for contacting us about {topics}. We will follow the "
+                "applicable support steps and verify any account-specific details before taking "
+                "action."
+            )
+            if missing:
+                response += f" Please provide the requested information: {missing[0]}"
+            response += f"\n\nBest regards,\n{context.company_name} Support"
+
+        escalation_reason = None
+        if context.no_match:
+            escalation_reason = "No guideline playbook covers this request"
+        elif needs_escalation:
+            escalation_reason = "The matched guideline includes an escalation step"
+        output = GuidanceOutput(
+            detected_intents=detected,
+            recommended_response=response,
+            requires_escalation=needs_escalation,
+            escalation_reason=escalation_reason,
+            references=list(dict.fromkeys(references)),
+            proposed_actions=[],
+            confidence="low" if context.no_match else "medium",
+            missing_information=list(dict.fromkeys(missing)),
+        )
+        return GenerationResult(output=output, model=self.model_name)

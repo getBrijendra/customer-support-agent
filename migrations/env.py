@@ -40,14 +40,26 @@ def _run(connection: Connection) -> None:
 
 
 async def run_migrations_online() -> None:
+    settings = get_settings()
     url = _url()
+    pglite = settings.PGLITE_MODE and url == settings.DATABASE_URL
     connect_args: dict[str, Any] = {}
-    if make_url(url).port == 6543:  # Supabase transaction pooler: no prepared statements
+    if pglite or make_url(url).port == 6543:
         connect_args = {"statement_cache_size": 0, "prepared_statement_cache_size": 0}
-    engine = create_async_engine(url, poolclass=pool.NullPool, connect_args=connect_args)
+    if pglite:
+        # Returning the connection to a one-slot pool avoids PGlite's broken wire-level close.
+        engine = create_async_engine(
+            url,
+            pool_size=1,
+            max_overflow=0,
+            pool_pre_ping=True,
+            connect_args=connect_args,
+        )
+    else:
+        engine = create_async_engine(url, poolclass=pool.NullPool, connect_args=connect_args)
     async with engine.connect() as connection:
         await connection.run_sync(_run)
-    await engine.dispose()
+    await engine.dispose(close=not pglite)
 
 
 if context.is_offline_mode():

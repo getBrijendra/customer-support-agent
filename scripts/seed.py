@@ -6,7 +6,7 @@ Idempotent: existing companies are reused; an upload identical to the active ver
 bindings are re-applied.
 
 Usage:
-  python scripts/seed.py                    # real Gemini compiler + embeddings (GOOGLE_API_KEY)
+  python scripts/seed.py                    # use the provider configured by LLM_PROVIDER
   python scripts/seed.py --fake-compiler    # offline: heuristic compiler/examples/router + fake
                                             # embeddings (no key needed; for demos/dev only)
   python scripts/seed.py --no-bindings      # skip the mock capability bindings
@@ -98,9 +98,11 @@ MCP_BINDINGS: dict[str, list[tuple[str, str, dict[str, Any], dict[str, Any]]]] =
 
 
 def _overrides(fake: bool, settings: Settings) -> tuple[Settings, dict[str, Any]]:
-    """--fake-compiler swaps the LLM compiler/example generator for the heuristic ones. Real
-    embeddings are still used when GOOGLE_API_KEY is set (so the seeded index works with the
-    running app); without a key, fake embeddings are recorded as model 'fake-embedding'."""
+    """--fake-compiler swaps the compiler/example generator/router for heuristic versions.
+
+    Embeddings follow LLM_PROVIDER so the seeded index matches the running app. In Google mode
+    without a key, the command falls back to LangChain's deterministic test embeddings.
+    """
     if not fake:
         return settings, {}
     from app.ai.heuristic import (
@@ -114,7 +116,7 @@ def _overrides(fake: bool, settings: Settings) -> tuple[Settings, dict[str, Any]
         "examples": HeuristicExampleGenerator(),
         "selector": HeuristicIntentSelector(),
     }
-    if not settings.GOOGLE_API_KEY:
+    if settings.LLM_PROVIDER != "fake" and not settings.GOOGLE_API_KEY:
         from langchain_core.embeddings import DeterministicFakeEmbedding
 
         emb = DeterministicFakeEmbedding(size=settings.EMBEDDING_DIMENSIONS)
@@ -158,7 +160,7 @@ async def main(fake: bool, bindings: bool) -> int:
         print(f"Missing seed guideline files in {SEED_DIR}: {', '.join(missing)}")
         print("Place the provided files there and re-run `make seed`.")
         return 1
-    if fake:
+    if fake or settings.LLM_PROVIDER == "fake":
         print("Using the OFFLINE heuristic compiler and fake embeddings (demo only).")
 
     settings, overrides = _overrides(fake, settings)

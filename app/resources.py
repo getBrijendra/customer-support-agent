@@ -212,7 +212,9 @@ class Resources:
     async def aclose(self) -> None:
         if self.file_store is not None:
             await self.file_store.aclose()
-        await self.engine.dispose()
+        # PGlite's socket server does not acknowledge asyncpg connection termination. Detach the
+        # local-only pool without waiting for a wire-level close; process exit releases the socket.
+        await self.engine.dispose(close=not self.settings.PGLITE_MODE)
 
 
 def build_rate_limiter(
@@ -251,6 +253,18 @@ def build_resources(
     configure_tracing(settings)
     engine = create_engine(settings)
     sessionmaker = create_sessionmaker(engine)
+    if settings.LLM_PROVIDER == "fake":
+        from app.ai.heuristic import (
+            HeuristicExampleGenerator,
+            HeuristicGuidanceGenerator,
+            HeuristicIntentSelector,
+            HeuristicPlaybookCompiler,
+        )
+
+        generator = generator or HeuristicGuidanceGenerator()
+        selector = selector or HeuristicIntentSelector(settings.ROUTING_MIN_SCORE)
+        compiler = compiler or HeuristicPlaybookCompiler()
+        examples = examples or HeuristicExampleGenerator()
     embeddings_for = embeddings_for or EmbeddingsRegistry(settings)
     timeout = settings.LLM_TIMEOUT_SECONDS
 

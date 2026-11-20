@@ -4,14 +4,18 @@ SUPABASE ?= $(shell command -v supabase >/dev/null 2>&1 && echo supabase || echo
 UV ?= uv
 RUN = $(UV) run
 
-.PHONY: help install db-up db-down db-reset db-status migrate seed seed-offline eval run test-unit test-integration test test-live lint format typecheck check
+.PHONY: help install db-pglite db-up db-down db-reset db-status migrate seed seed-offline eval run test-unit test-integration test test-live lint format typecheck check
 
 help:
-	@echo "install | db-up | db-down | db-reset | db-status | migrate | seed | seed-offline | eval | run"
+	@echo "install | db-pglite | db-up | db-down | db-reset | db-status | migrate | seed | seed-offline | eval | run"
 	@echo "test-unit | test-integration | test | test-live | lint | format | typecheck | check"
 
 install:
 	$(UV) sync
+	npm install
+
+db-pglite:     ## foreground local PGlite server; use Ctrl+C to stop
+	npm run db:pglite
 
 db-up:          ## start local Supabase + create the integration-test database
 	$(SUPABASE) start

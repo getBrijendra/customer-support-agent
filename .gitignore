@@ -3,6 +3,8 @@
 !.env.example
 !.env.prod.example
 .venv/
+node_modules/
+.pglite/
 __pycache__/
 *.pyc
 .pytest_cache/

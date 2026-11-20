@@ -8,8 +8,12 @@ How it works in one paragraph:
 2. Chats are **routed** to the right intents (several when needed) with hybrid search (pgvector + Postgres full-text) and a fast router LLM.
 3. The harness can **look up** data in the company's own systems (MCP server, HTTP API, read-only SQL) and **proposes** writes (refunds, resets) that the agent approves.
 
-- **LLMs and embeddings:** Google Gemini via LangChain, with three roles: generator (Pro), compiler (Pro) and router (Flash-Lite). Model names come from config.
-- **Database and search:** Supabase Postgres with **pgvector**. The Supabase CLI runs it locally and hosted Supabase in production. The app uses SQLAlchemy 2 async with asyncpg, and **Alembic owns the schema**. There is no separate vector database.
+- **LLMs and embeddings:** deterministic fake collaborators run fully offline in local development.
+  Production uses Google Gemini via LangChain for generation, compilation, routing and embeddings.
+- **Database and search:** Postgres with **pgvector**. PGlite provides a lightweight persistent
+  local database; hosted Supabase is used in production, and real Postgres remains the integration-test
+  target. The app uses SQLAlchemy 2 async with asyncpg, and **Alembic owns the schema**. There is no
+  separate vector database.
 - **Chat harness:** a [LangGraph](https://github.com/langchain-ai/langgraph) graph that runs **in-process** inside the API. There is no LangGraph Platform or LangSmith deployment.
 
 ```
@@ -28,16 +32,31 @@ See [architecture.md](architecture.md) for diagrams and the key decisions, and
 
 ## First-time local setup
 
-1. Install Docker and the Supabase CLI (`brew install supabase/tap/supabase`, the official binary, or `npx supabase`; the Makefile falls back to `npx`). Then run `uv sync`.
-2. Run `cp .env.example .env`. Add `GOOGLE_API_KEY`, your own `AGENT_API_KEYS` / `ADMIN_API_KEYS`, and a `SECRETS_ENCRYPTION_KEY` (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`). After step 3, also set `SUPABASE_SERVICE_ROLE_KEY` to the **Secret** key from `supabase status` (or set `GUIDELINE_STORAGE_BACKEND=none`).
-3. Run `make db-up`, then confirm the DB URL with `supabase status`.
-4. Run `make migrate && make seed`.
-5. Run `make run` and open <http://127.0.0.1:8000/docs>.
-6. Run `make test`.
+1. Install Python 3.12+, `uv`, and Node.js/npm. Run `uv sync` and `npm install`.
+2. Run `cp .env.example .env`. Add your own `AGENT_API_KEYS` / `ADMIN_API_KEYS` and a
+   `SECRETS_ENCRYPTION_KEY`
+   (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
+3. In terminal 1, run `npm run db:pglite`. Data persists under `.pglite/`; press Ctrl+C to stop it.
+4. In terminal 2, run `uv run alembic upgrade head`, then optionally
+   `uv run python scripts/seed.py`. The configured fake provider is used automatically.
+5. Run `uv run uvicorn app.main:app --reload` and open <http://127.0.0.1:8000/docs>.
+6. Run `uv run pytest -m unit` for the Docker-free test tier.
 
-> **Ports:** `supabase/config.toml` moves this project to the **554xx** range (DB `55422`, Studio
-> `55423`) so it can run next to other local Supabase projects. Always copy the DB URL from
-> `supabase status` into `.env`, with the scheme changed to `postgresql+asyncpg://`.
+> **Ports:** PGlite listens on `55432`. The optional Supabase CLI stack uses DB `55422` and Studio
+> `55423`, so both can be installed without a port collision.
+
+`PGLITE_MODE=true` makes the app use `PGLITE_DATABASE_URL` and leaves `DATABASE_URL` untouched.
+Set `PGLITE_MODE=false` to return to the real Postgres/Supabase URL. PGlite remains local-only;
+its socket accepts eight logical clients. FastAPI uses one serialized connection, leaving seven
+slots for Pgweb or CLI tools. This avoids unsafe concurrent extended-query execution in
+PGlite's single WASM backend. Run the integration suite against real Postgres before release.
+
+The Gemini SDK is not installed by the default local `uv sync`. To run against Gemini outside the
+production image, use `uv sync --extra google`, set `LLM_PROVIDER=google`, and add `GOOGLE_API_KEY`.
+
+For real local Postgres + pgvector integration testing, install Docker and the Supabase CLI, run
+`make db-up`, and use the URLs reported by `supabase status`. `make db-up` also creates the isolated
+`support_assistant_test` database.
 
 `make db-up` runs `supabase start` and then `scripts/create_test_db.py`, which creates
 `support_assistant_test` for the integration tests. `make db-reset` wipes the local DB, then
@@ -51,7 +70,8 @@ re-runs the migrations and the seed.
 4. For **AgriFarm** (fresh-food delivery plus a weekly Farm Box), registers the built-in MCP server `inproc://agrifarm`, discovers its tools and binds all 13 capabilities to it. The policies are: refund ≤ 60, store credit ≤ 15, discount ≤ 15 %, Farm Box pause ≤ 4 weeks.
 
 Flags:
-- `make seed-offline` (`--fake-compiler`) uses the deterministic heuristic compiler instead of the LLM compiler. It still uses real embeddings when a key is set.
+- With `LLM_PROVIDER=fake`, normal `make seed` is fully offline. `make seed-offline`
+  (`--fake-compiler`) can also force heuristic compilation when the configured provider is Google.
 - `--no-bindings` skips the mock bindings.
 
 Re-running the script is safe.
@@ -72,8 +92,10 @@ playbook. Run `make migrate && make seed` (or re-upload your guidelines) after u
 
 | Variable | Notes |
 |---|---|
-| `DATABASE_URL` / `TEST_DATABASE_URL` | asyncpg URLs. The test DB name **must end in `_test`**. |
-| `GOOGLE_API_KEY`, `LLM_MODEL`, `COMPILER_MODEL`, `ROUTER_MODEL`, `EMBEDDING_MODEL` | Gemini. Without a key the app starts, but uploads end `failed` and chats return `502 LLM_ERROR`. |
+| `PGLITE_MODE` / `PGLITE_DATABASE_URL` / `PGLITE_APP_POOL_SIZE` | Local PGlite switch, socket URL and FastAPI pool size (safely defaults to 1 of 8 socket slots). Turning it off restores `DATABASE_URL`. |
+| `DATABASE_URL` / `TEST_DATABASE_URL` | Real Postgres asyncpg URLs. The test DB name **must end in `_test`**. |
+| `LLM_PROVIDER` | `fake` runs local generator/compiler/router/embeddings with no API calls; `google` uses the optional Gemini dependency (`uv sync --extra google`). Fake mode is rejected in production. |
+| `GOOGLE_API_KEY`, `LLM_MODEL`, `COMPILER_MODEL`, `ROUTER_MODEL`, `EMBEDDING_MODEL` | Used only with the Google provider. Without a key, Google-mode uploads and chats fail. |
 | `EMBEDDING_DIMENSIONS` | `768`, **fixed by the migration** (`vector(768)`). The app refuses to start if it differs. The Gemini embeddings client requests this size with `output_dimensionality`. |
 | `ROUTING_CANDIDATES` / `ROUTING_MAX_INTENTS` / `ROUTING_MIN_SCORE` | How many intents the router sees, how many it may pick, and the no-match threshold. |
 | `AUTO_APPROVE_GUIDELINES` / `AUTO_APPROVE_MIN_ROUTING_TOP1` | Whether auto-approval is on, and its eval gate (default 0.8 top-1 accuracy). |

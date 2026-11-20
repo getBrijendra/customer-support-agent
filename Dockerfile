@@ -14,7 +14,7 @@ WORKDIR /app
 
 # Dependencies first (cached layer), from the lock file only.
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --extra google --no-install-project
 
 COPY app ./app
 COPY migrations ./migrations

@@ -22,14 +22,14 @@ Actions:    agent approves a proposed action → policy re-check → execute onc
 | API framework | **FastAPI** (async), Pydantic v2, Uvicorn |
 | AI orchestration | **LangChain** (`langchain-core`, `langchain-google-genai`) for models, embeddings and structured output |
 | Chat harness runtime | **LangGraph** (the open-source library `langgraph`). It runs **in-process inside the FastAPI app**: no LangGraph Server/Platform, no LangSmith deployment, no extra service. No checkpointer: one chat = one graph run. Ingestion is **not** a graph (plain async function). |
-| LLM + embeddings provider | **Google Gemini** via `ChatGoogleGenerativeAI` and `GoogleGenerativeAIEmbeddings`. Three chat roles: **generator** (`LLM_MODEL`, a current "pro" model), **compiler** (`COMPILER_MODEL`, a "pro" model), **router** (`ROUTER_MODEL`, a cheap/fast model). Plus `EMBEDDING_MODEL`. Names come from env vars, never hard-coded. Check the current Gemini model list for defaults in `.env.example`. |
-| Relational DB | **Supabase Postgres** in every environment that runs the app: **local Supabase via the Supabase CLI** for development and integration tests, hosted Supabase for production. **SQLAlchemy 2.0 async + asyncpg**, schema owned by **Alembic** |
+| LLM + embeddings provider | Deterministic heuristic generator/compiler/router plus fake embeddings for offline local development; **Google Gemini** via LangChain in production. `LLM_PROVIDER` selects the mode, and fake mode is forbidden when `APP_ENV=prod`. |
+| Relational DB | PostgreSQL semantics in every environment: persistent **PGlite** for lightweight local development, real local Supabase/Postgres for integration tests, and hosted Supabase for production. **SQLAlchemy 2.0 async + asyncpg**, schema owned by **Alembic** |
 | Vector search | **pgvector in the same Postgres** (`pgvector` Python package, SQLAlchemy `Vector` type). Hybrid search = pgvector cosine + Postgres full-text (`tsvector`), fused with Reciprocal Rank Fusion. Behind a `SearchGateway` interface so a dedicated vector DB can replace it later. **No Chroma.** |
 | MCP client | the official `mcp` SDK (`mcp.Client`), streamable HTTP transport. Tool schemas exposed to the model come from the capability registry, not from the MCP server, so `langchain-mcp-adapters` isn't needed. |
 | Secrets for company integrations | `cryptography` (Fernet) behind a `SecretStore` interface (KMS/Vault later) |
 | Tracing | LangSmith tracing is **off by default**; opt-in via `LANGSMITH_TRACING`. The README must warn that enabling it sends customer messages and tool data to an external service. |
 | SQLite | **Only** for pure unit tests that don't touch locking, JSON queries, vectors, full-text, percentiles, timestamps-with-timezone or migrations (see §14). Never used to run the app. |
-| Package manager | `uv` (fall back to pip + `requirements.txt` if unavailable) |
+| Package manager | `uv` for Python (`google` extra for production Gemini); npm installs the pinned local PGlite runtime |
 | Tests | `pytest`, `pytest-asyncio`, `httpx.AsyncClient` |
 | Lint/format | `ruff` (lint + format), `mypy` (non-strict is fine) |
 
@@ -789,14 +789,14 @@ Opt-in (skipped unless `GOOGLE_API_KEY` is set): upload and compile the bookshop
 - Seed files: `data/seed_guidelines/bookshop.txt`, `data/seed_guidelines/vpn_saas.txt` (provided by the user — never invent their contents; tests use their own fixtures).
 - `scripts/seed.py`: creates `bookshop` ("Bookshop") and `vpn-saas` ("VPN SaaS") if absent, uploads each file through the service layer (sync), and creates `live` **mock** bindings for the read capabilities (and a few writes with a policy) so the demo shows verified lookups. Flags: `--fake-compiler` (offline, no Gemini key), `--no-bindings`.
 - `docker-compose.yml`: only the `api` service and `.env`; reach the Supabase CLI DB at `host.docker.internal:54322` with `extra_hosts: ["host.docker.internal:host-gateway"]`. No vector volume needed anymore.
-- `Makefile`: `db-up`, `db-down`, `db-reset`, `migrate`, `seed`, `run`, `eval`, `test-unit`, `test-integration`, `test`.
+- `Makefile`: `db-pglite`, `db-up`, `db-down`, `db-reset`, `migrate`, `seed`, `run`, `eval`, `test-unit`, `test-integration`, `test`.
 - **First-time local setup** (README lists exactly this):
-  1. Install Docker + Supabase CLI; `uv sync`.
-  2. `cp .env.example .env`, add `GOOGLE_API_KEY`, API keys and `SECRETS_ENCRYPTION_KEY`.
-  3. `make db-up`; confirm the URL with `supabase status`.
-  4. `make migrate && make seed`.
+  1. Install Python 3.12+, `uv`, and Node.js/npm; run `uv sync` and `npm install`.
+  2. `cp .env.example .env`, add API keys and `SECRETS_ENCRYPTION_KEY`; fake AI needs no cloud key.
+  3. Start `npm run db:pglite` in terminal 1.
+  4. In terminal 2, run `uv run alembic upgrade head`, optionally seed, then start Uvicorn.
   5. `make run` → `http://127.0.0.1:8000/docs`.
-  6. `make test`.
+  6. Run the unit tier; use local Supabase/Postgres for the integration tier before release.
 - **Production**: copy `.env.prod.example`, set `DATABASE_URL` (direct or session pooler, port 5432), `SECRETS_ENCRYPTION_KEY`, `OUTBOUND_ALLOW_PRIVATE_NETWORK=false`; run `alembic upgrade head`; deploy.
 - README also covers: the pooler note, the Alembic-only rule, pgvector notes, `curl` examples for every endpoint, how to bind an MCP server / HTTP API / read-only SQL, the LangSmith privacy warning, the "verified vs manual" demo (same chat with and without a binding), and how to swap `SearchGateway`.
 

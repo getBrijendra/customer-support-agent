@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -45,13 +45,18 @@ class Settings(BaseSettings):
     APP_ENV: Literal["local", "test", "prod"] = "local"
 
     # --- Database -------------------------------------------------------------
+    # PGlite is a local-only Postgres-compatible WASM server. Keep DATABASE_URL as the real
+    # Postgres/Supabase URL so switching back only requires PGLITE_MODE=false.
+    PGLITE_MODE: bool = False
+    PGLITE_DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:55432/postgres"
+    PGLITE_APP_POOL_SIZE: int = Field(default=1, ge=1, le=8)
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:55422/postgres"
     TEST_DATABASE_URL: str | None = None
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
 
     # --- AI provider ----------------------------------------------------------
-    LLM_PROVIDER: Literal["google"] = "google"
+    LLM_PROVIDER: Literal["google", "fake"] = "google"
     GOOGLE_API_KEY: SecretStr | None = None
     LLM_MODEL: str = "gemini-3.1-pro-preview"  # generator
     COMPILER_MODEL: str = "gemini-3.1-pro-preview"  # guideline -> playbook compiler
@@ -155,6 +160,22 @@ class Settings(BaseSettings):
             except ValueError as exc:
                 raise ValueError(f"invalid rate limit {value!r}: {exc}") from exc
         return value
+
+    @model_validator(mode="after")
+    def _select_database_url(self) -> Settings:
+        if self.PGLITE_MODE:
+            if self.APP_ENV == "prod":
+                raise ValueError("PGLITE_MODE cannot be enabled in production")
+            self.DATABASE_URL = self.PGLITE_DATABASE_URL
+        if self.LLM_PROVIDER == "fake":
+            if self.APP_ENV == "prod":
+                raise ValueError("The fake LLM provider cannot be enabled in production")
+            self.LLM_MODEL = "heuristic-generator"
+            self.COMPILER_MODEL = "heuristic-compiler"
+            self.ROUTER_MODEL = "heuristic-router"
+            self.EMBEDDING_MODEL = "fake-embedding"
+            self.LANGSMITH_TRACING = False
+        return self
 
     @property
     def agent_keys(self) -> list[ApiKey]:
