@@ -63,6 +63,7 @@ SKIP_HINT = "set TEST_DATABASE_URL and pass --integration-db=postgres"
 PGLITE_SERVER = (
     ROOT / "node_modules" / "@electric-sql" / "pglite-socket" / "dist" / "scripts" / "server.js"
 )
+PGLITE_START_TIMEOUT_SECONDS = 60
 
 
 @pytest.fixture(scope="session")
@@ -90,7 +91,7 @@ async def _pglite_version(url: str, connect_timeout: float = 1) -> str:
 
 
 def _wait_for_pglite(url: str, process: subprocess.Popen[Any], log: Any) -> None:
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + PGLITE_START_TIMEOUT_SECONDS
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         if process.poll() is not None:

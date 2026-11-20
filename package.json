@@ -5,8 +5,8 @@
     "db:pglite": "pglite-server --db=./.pglite --host=127.0.0.1 --port=55432 --extensions=@electric-sql/pglite-pgvector:vector --max-connections=8"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "0.5.17",
-    "@electric-sql/pglite-pgvector": "0.0.18",
-    "@electric-sql/pglite-socket": "0.2.20"
+    "@electric-sql/pglite": "0.5.15",
+    "@electric-sql/pglite-pgvector": "0.0.16",
+    "@electric-sql/pglite-socket": "0.2.18"
   }
 }
