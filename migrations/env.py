@@ -42,7 +42,9 @@ def _run(connection: Connection) -> None:
 async def run_migrations_online() -> None:
     settings = get_settings()
     url = _url()
-    pglite = settings.PGLITE_MODE and url == settings.DATABASE_URL
+    pglite = bool(config.attributes.get("pglite")) or (
+        settings.PGLITE_MODE and url == settings.DATABASE_URL
+    )
     connect_args: dict[str, Any] = {}
     if pglite or make_url(url).port == 6543:
         connect_args = {"statement_cache_size": 0, "prepared_statement_cache_size": 0}

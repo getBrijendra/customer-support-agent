@@ -2,44 +2,71 @@
 name = "support-assistant"
 version = "0.1.0"
 requires-python = ">=3.12"
+# Four-week release-age gate: versions must predate 2026-10-23.
 dependencies = [
-    "alembic>=1.20.1",
-    "asyncpg>=0.32.0",
-    "cryptography>=50.0.2",
-    "fastapi>=0.162.2",
-    "httpx>=0.28.1",
-    "jinja2>=3.1.6",
-    "langchain-core>=1.7.7",
-    "langgraph>=1.2.20",
-    "limits[async-redis]>=5.8.0",
-    "mcp>=2.3.0",
-    "pgvector>=0.5.1",
-    "prometheus-client>=0.26.0",
-    "prometheus-fastapi-instrumentator>=8.1.0",
-    "pydantic>=2.14.3",
-    "pydantic-settings>=2.16.2",
-    "python-multipart>=0.0.33",
-    "sentry-sdk[fastapi]>=2.75.0",
-    "sqlalchemy[asyncio]>=2.1.8",
-    "uvicorn[standard]>=0.54.0",
+    "alembic==1.20.1",
+    "asyncpg==0.32.0",
+    "cryptography==50.0.2",
+    "fastapi==0.160.0",
+    "httpx==0.28.1",
+    "jinja2==3.1.6",
+    "langchain-core==1.7.0",
+    "langgraph==1.2.16",
+    "limits[async-redis]==5.8.0",
+    "mcp==2.3.0",
+    "pgvector==0.5.1",
+    "prometheus-client==0.26.0",
+    "prometheus-fastapi-instrumentator==8.1.0",
+    "pydantic==2.14.1",
+    "pydantic-settings==2.16.1",
+    "python-multipart==0.0.32",
+    "sentry-sdk[fastapi]==2.73.0",
+    "sqlalchemy[asyncio]==2.1.6",
+    "uvicorn[standard]==0.54.0",
 ]
 
 [project.optional-dependencies]
-google = ["langchain-google-genai>=4.4.3"]
+google = ["langchain-google-genai==4.4.2"]
 
 [dependency-groups]
 dev = [
-    "aiosqlite>=0.22.1",
-    "httpx>=0.28.1",
-    "mypy>=2.4.1",
-    "numpy>=2.5.4",
-    "pytest>=9.2.0",
-    "pytest-asyncio>=1.4.1.post1",
-    "ruff>=0.17.4",
+    "aiosqlite==0.22.1",
+    "httpx==0.28.1",
+    "mypy==2.4.0",
+    "numpy==2.5.4",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.17.1",
 ]
 
 [tool.uv]
 package = false
+# Keep indirect and optional packages inside the same release-age gate.
+constraint-dependencies = [
+    "anyio==4.15.1",
+    "certifi==2026.10.19",
+    "click==8.5.0",
+    "deprecated==3.0.0",
+    "google-auth==2.62.0",
+    "google-genai==2.32.0",
+    "jsonpatch==1.36",
+    "jsonpointer==3.4",
+    "langchain-protocol==0.0.20",
+    "langgraph-checkpoint==4.3.0",
+    "langgraph-sdk==0.4.8",
+    "langsmith==0.14.12",
+    "mypy-extensions==1.1.0",
+    "opentelemetry-api==1.45.1",
+    "ormsgpack==1.13.0",
+    "pyasn1==0.6.4",
+    "sse-starlette==3.5.0",
+    "starlette==1.9.0",
+    "typing-inspection==0.4.4",
+    "uuid-utils==0.18.0",
+    "websockets==16.1.1",
+    "wrapt==2.5.1",
+    "xxhash==4.0.2",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -49,7 +76,7 @@ asyncio_default_fixture_loop_scope = "function"
 asyncio_default_test_loop_scope = "function"
 markers = [
     "unit: fast tests with no Postgres (SQLite allowed only where noted)",
-    "integration: tests against a real Postgres database (local Supabase / CI)",
+    "integration: full-stack tests against ephemeral PGlite or explicit real Postgres",
     "live: opt-in smoke test against the real Gemini API (needs GOOGLE_API_KEY)",
 ]
 filterwarnings = [

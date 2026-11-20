@@ -80,7 +80,7 @@ class ActionService:
                     f"Action is '{action.status}'", details={"status": action.status}
                 )
             company_id = action.company_id
-            bindings = await self._integrations.live_bindings(company_id)
+            bindings = await self._integrations.live_bindings(company_id, uow=uow)
             binding = bindings.get(action.capability)
             cap = get_capability(action.capability)
             if binding is None or cap is None:

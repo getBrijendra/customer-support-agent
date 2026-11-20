@@ -1,6 +1,6 @@
-"""Opt-in live smoke test: real Gemini compiler, router, generator and embeddings against local
-Supabase. Skipped unless GOOGLE_API_KEY is set (env or .env), the bookshop seed file exists and
-the integration database is reachable. Run with: pytest -m live
+"""Opt-in live smoke test: real Gemini compiler, router, generator and embeddings against the
+selected integration backend. Skipped unless GOOGLE_API_KEY is set (env or .env) and the bookshop
+seed file exists. Run with: pytest -m live
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.core.config import Settings
+from app.db.session import create_engine
 from app.main import create_app
 from tests.conftest import ADMIN_HEADERS, AGENT_HEADERS, make_settings, running_client
 from tests.integration.conftest import create_company, pg_url  # noqa: F401  (fixture)
@@ -18,14 +19,18 @@ SEED = Path(__file__).resolve().parents[2] / "data" / "seed_guidelines" / "books
 
 
 @pytest.fixture
-def live_settings(pg_url: str) -> Settings:  # noqa: F811
+def live_settings(pg_url: str, integration_db_backend: str) -> Settings:  # noqa: F811
     env = Settings()
     if not env.GOOGLE_API_KEY:
         pytest.skip("GOOGLE_API_KEY not set")
     if not SEED.is_file():
         pytest.skip(f"seed file missing: {SEED}")
+    pglite = integration_db_backend == "pglite"
     return make_settings(
         DATABASE_URL=pg_url,
+        PGLITE_MODE=pglite,
+        PGLITE_DATABASE_URL=pg_url,
+        PGLITE_APP_POOL_SIZE=1,
         GOOGLE_API_KEY=env.GOOGLE_API_KEY.get_secret_value(),
         LLM_MODEL=env.LLM_MODEL,
         ROUTER_MODEL=env.ROUTER_MODEL,
@@ -38,12 +43,11 @@ def live_settings(pg_url: str) -> Settings:  # noqa: F811
 
 async def test_live_bookshop_question(live_settings: Settings) -> None:
     from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
 
-    engine = create_async_engine(live_settings.DATABASE_URL)
+    engine = create_engine(live_settings)
     async with engine.begin() as conn:
         await conn.execute(text("TRUNCATE chats, guideline_versions, companies CASCADE"))
-    await engine.dispose()
+    await engine.dispose(close=not live_settings.PGLITE_MODE)
 
     app = create_app(live_settings)
     async with running_client(app) as client:

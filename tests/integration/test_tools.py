@@ -291,10 +291,12 @@ async def test_sql_readonly_binding(
     client_factory: ClientFactory,
     db_sessionmaker: async_sessionmaker[AsyncSession],
     pg_url: str,
+    integration_db_backend: str,
 ) -> None:
     """Case 28: an admin-defined SELECT against a company database; writes are rejected."""
     dsn = _plain_dsn(pg_url)
-    conn = await asyncpg.connect(dsn)
+    pglite = integration_db_backend == "pglite"
+    conn = await asyncpg.connect(dsn, statement_cache_size=0 if pglite else 100)
     await conn.execute(
         "DROP TABLE IF EXISTS ext_orders; CREATE TABLE ext_orders (id text, status text, eta text);"
         "INSERT INTO ext_orders VALUES ('1001', 'shipped', '2026-11-18')"
@@ -368,7 +370,10 @@ async def test_sql_readonly_binding(
         assert await conn.fetchval("SELECT count(*) FROM ext_orders") == 1
     finally:
         await conn.execute("DROP TABLE IF EXISTS ext_orders")
-        await conn.close()
+        if pglite:
+            conn.terminate()
+        else:
+            await conn.close()
 
 
 async def test_integrations_are_tenant_isolated(

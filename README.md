@@ -10,10 +10,10 @@ How it works in one paragraph:
 
 - **LLMs and embeddings:** deterministic fake collaborators run fully offline in local development.
   Production uses Google Gemini via LangChain for generation, compilation, routing and embeddings.
-- **Database and search:** Postgres with **pgvector**. PGlite provides a lightweight persistent
-  local database; hosted Supabase is used in production, and real Postgres remains the integration-test
-  target. The app uses SQLAlchemy 2 async with asyncpg, and **Alembic owns the schema**. There is no
-  separate vector database.
+- **Database and search:** Postgres with **pgvector**. PGlite provides the lightweight persistent
+  local database and the default ephemeral integration-test backend; hosted Supabase is used in
+  production, with a real-Postgres compatibility mode for release checks. The app uses SQLAlchemy 2
+  async with asyncpg, and **Alembic owns the schema**. There is no separate vector database.
 - **Chat harness:** a [LangGraph](https://github.com/langchain-ai/langgraph) graph that runs **in-process** inside the API. There is no LangGraph Platform or LangSmith deployment.
 
 ```
@@ -54,9 +54,9 @@ PGlite's single WASM backend. Run the integration suite against real Postgres be
 The Gemini SDK is not installed by the default local `uv sync`. To run against Gemini outside the
 production image, use `uv sync --extra google`, set `LLM_PROVIDER=google`, and add `GOOGLE_API_KEY`.
 
-For real local Postgres + pgvector integration testing, install Docker and the Supabase CLI, run
-`make db-up`, and use the URLs reported by `supabase status`. `make db-up` also creates the isolated
-`support_assistant_test` database.
+For optional real local Postgres + pgvector integration testing, install Docker and the Supabase
+CLI, run `make db-up`, and then `make test-integration-postgres`. `make db-up` also creates the
+isolated `support_assistant_test` database from `TEST_DATABASE_URL`.
 
 `make db-up` runs `supabase start` and then `scripts/create_test_db.py`, which creates
 `support_assistant_test` for the integration tests. `make db-reset` wipes the local DB, then
@@ -402,13 +402,14 @@ Error codes:
 
 | Command | What it runs |
 |---|---|
-| `make test-unit` | `pytest -m unit`: about 130 fast tests (under 10 s), with no Docker or Postgres. Only U8 uses in-memory SQLite. |
-| `make test-integration` | `pytest -m integration`: the real app against real Postgres + pgvector (`TEST_DATABASE_URL`). |
-| `make test` | Both tiers. Plain `pytest` skips the integration tier with a hint if Postgres is unreachable. |
+| `make test-unit` | Fast unit tests with no Docker or Postgres. Only the repository unit test uses in-memory SQLite. |
+| `make test-integration` | All integration tests against a fresh in-memory PGlite + pgvector server; it starts and stops automatically. |
+| `make test-integration-postgres` | The same suite against real Postgres + pgvector (`TEST_DATABASE_URL`). |
+| `make test` | Unit and integration tiers; the integration tier uses ephemeral PGlite. |
 | `make test-live` | Opt-in: real Gemini compiler, router, generator and embeddings (needs `GOOGLE_API_KEY` and `bookshop.txt`). |
 | `make eval` | Routing evals for the seed companies' active versions. |
 
-No test needs a Gemini key. They use:
+No non-live test needs a Gemini key. They use:
 - `DeterministicFakeEmbedding(size=768)`;
 - the heuristic compiler, example generator and router (`app/ai/heuristic.py`);
 - a fake generator that builds output from the context;
@@ -416,13 +417,15 @@ No test needs a Gemini key. They use:
 - mock adapters;
 - an **in-process MCP server** (`MCPServer` from the `mcp` SDK).
 
-The integration harness drops and recreates the test database, runs `alembic upgrade head`, and
-truncates every table between tests. It refuses to run against a database whose name doesn't
-end in `_test`.
+The default integration harness starts a dedicated in-memory PGlite socket server, recreates its
+`public` schema, runs `alembic upgrade head`, truncates every table between tests, and stops the
+server at session end. It requires Node.js and `npm install`, but not Docker. In explicit Postgres
+mode it instead drops and recreates `TEST_DATABASE_URL`, whose database name must end in `_test`.
 
 No hosted CI pipeline is configured. Before pushing, run the same checks locally:
 1. `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy app` and `make test-unit`.
-2. `make test-integration` against local Supabase (Postgres 17 + pgvector, the same major version as hosted Supabase).
+2. `make test-integration`; before release, also run `make test-integration-postgres` against local
+   Supabase (Postgres 17 + pgvector, the same major version as hosted Supabase).
 
 ---
 

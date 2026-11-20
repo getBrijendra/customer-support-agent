@@ -82,13 +82,18 @@ async def upload_guidelines(
     content = await file.read(settings.MAX_UPLOAD_BYTES + 1)
     if len(content) > settings.MAX_UPLOAD_BYTES:
         raise FileTooLarge(f"File exceeds the {settings.MAX_UPLOAD_BYTES} byte limit")
+    # FastAPI 0.160/python-multipart 0.0.32 coerce an omitted multipart bool to False even when
+    # its declared default is True. Presence in the parsed form lets us preserve the API default
+    # while still honoring an explicit `activate=false`.
+    form = await request.form()
+    activate_requested = activate if "activate" in form else True
     created = await service.create_version(
         slug=slug,
         filename=file.filename,
         content=content,
         notes=notes,
         uploaded_by=principal.label,
-        activate=activate,
+        activate=activate_requested,
         content_type=file.content_type,
     )
     version_id = created.version.id

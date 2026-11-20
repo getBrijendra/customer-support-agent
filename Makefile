@@ -4,11 +4,11 @@ SUPABASE ?= $(shell command -v supabase >/dev/null 2>&1 && echo supabase || echo
 UV ?= uv
 RUN = $(UV) run
 
-.PHONY: help install db-pglite db-up db-down db-reset db-status migrate seed seed-offline eval run test-unit test-integration test test-live lint format typecheck check
+.PHONY: help install db-pglite db-up db-down db-reset db-status migrate seed seed-offline eval run test-unit test-integration test-integration-postgres test test-live lint format typecheck check
 
 help:
 	@echo "install | db-pglite | db-up | db-down | db-reset | db-status | migrate | seed | seed-offline | eval | run"
-	@echo "test-unit | test-integration | test | test-live | lint | format | typecheck | check"
+	@echo "test-unit | test-integration | test-integration-postgres | test | test-live | lint | format | typecheck | check"
 
 install:
 	$(UV) sync
@@ -53,6 +53,9 @@ test-unit:
 
 test-integration:
 	$(RUN) pytest -m integration
+
+test-integration-postgres:
+	$(RUN) pytest -m integration --integration-db=postgres
 
 test:
 	$(RUN) pytest -m "unit or integration"

@@ -90,10 +90,14 @@ class IntegrationService:
         return company
 
     # ---------------------------------------------------------------- loaders
-    async def live_bindings(self, company_id: uuid.UUID) -> dict[str, BindingSnapshot]:
-        async with self._uow() as uow:
-            bindings = await uow.capabilities.list_bindings(company_id, live_only=True)
-            servers = await uow.capabilities.servers_by_id(company_id)
+    async def live_bindings(
+        self, company_id: uuid.UUID, *, uow: UnitOfWork | None = None
+    ) -> dict[str, BindingSnapshot]:
+        if uow is None:
+            async with self._uow() as owned_uow:
+                return await self.live_bindings(company_id, uow=owned_uow)
+        bindings = await uow.capabilities.list_bindings(company_id, live_only=True)
+        servers = await uow.capabilities.servers_by_id(company_id)
         return {b.capability: snapshot(b, servers) for b in bindings}
 
     def secret_getter(self, company_id: uuid.UUID) -> SecretGetter:

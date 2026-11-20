@@ -1,6 +1,6 @@
-"""Integration tier: the real app against real Postgres (local Supabase or a CI Postgres service).
+"""Integration tier against ephemeral PGlite (default) or an explicit real Postgres service.
 
-Session start: drop + recreate the test database, then `alembic upgrade head` (never create_all).
+Session start: reset the isolated database, then `alembic upgrade head` (never create_all).
 Between tests: TRUNCATE all app tables.
 """
 
@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator, Callable
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -21,10 +26,11 @@ from alembic.config import Config
 from fastapi import FastAPI
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.heuristic import HeuristicExampleGenerator, HeuristicPlaybookCompiler
 from app.core.config import Settings
+from app.db.session import create_engine
 from app.main import create_app
 from tests.conftest import (
     ADMIN_HEADERS,
@@ -53,9 +59,98 @@ APP_TABLES = (
     "guideline_versions",
     "companies",
 )
-SKIP_HINT = (
-    "start local Supabase with `make db-up` (or set TEST_DATABASE_URL to a reachable Postgres)"
+SKIP_HINT = "set TEST_DATABASE_URL and pass --integration-db=postgres"
+PGLITE_SERVER = (
+    ROOT / "node_modules" / "@electric-sql" / "pglite-socket" / "dist" / "scripts" / "server.js"
 )
+
+
+@pytest.fixture(scope="session")
+def integration_db_backend(pytestconfig: pytest.Config) -> str:
+    return str(pytestconfig.getoption("--integration-db"))
+
+
+def _available_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+async def _pglite_version(url: str, connect_timeout: float = 1) -> str:
+    conn = await asyncpg.connect(
+        _plain_dsn(url),
+        timeout=connect_timeout,
+        statement_cache_size=0,
+    )
+    try:
+        return str(await conn.fetchval("SELECT version()"))
+    finally:
+        # PGlite's wire server does not complete asyncpg's graceful close handshake.
+        conn.terminate()
+
+
+def _wait_for_pglite(url: str, process: subprocess.Popen[Any], log: Any) -> None:
+    deadline = time.monotonic() + 20
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            break
+        try:
+            version = asyncio.run(_pglite_version(url))
+            if "PGlite" not in version:
+                raise RuntimeError(f"unexpected database server: {version}")
+            return
+        except (OSError, asyncpg.PostgresError, TimeoutError) as exc:
+            last_error = exc
+            time.sleep(0.05)
+    log.flush()
+    log.seek(0)
+    output = log.read().strip()
+    pytest.exit(
+        f"PGlite test server failed to start ({last_error!r}).\n{output}",
+        returncode=2,
+    )
+
+
+@pytest.fixture(scope="session")
+def pglite_url(integration_db_backend: str) -> Iterator[str | None]:
+    """Start one isolated in-memory PGlite socket server for the integration session."""
+    if integration_db_backend != "pglite":
+        yield None
+        return
+    node = shutil.which("node")
+    if not node or not PGLITE_SERVER.is_file():
+        pytest.exit("PGlite integration tests require Node.js and `npm install`", returncode=2)
+    port = _available_port()
+    url = f"postgresql+asyncpg://postgres:postgres@127.0.0.1:{port}/postgres"
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as log:
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        process = subprocess.Popen(
+            [
+                node,
+                str(PGLITE_SERVER),
+                "--db=memory://",
+                "--host=127.0.0.1",
+                f"--port={port}",
+                "--extensions=@electric-sql/pglite-pgvector:vector",
+                "--max-connections=256",
+            ],
+            cwd=ROOT,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            creationflags=creationflags,
+        )
+        try:
+            _wait_for_pglite(url, process, log)
+            yield url
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
 
 
 def _configured_urls() -> tuple[str | None, str | None]:
@@ -83,11 +178,24 @@ async def _recreate_database(url: str) -> None:
         await conn.close()
 
 
-def alembic_config(url: str) -> Config:
+async def _reset_pglite_database(url: str) -> None:
+    conn = await asyncpg.connect(_plain_dsn(url), timeout=5, statement_cache_size=0)
+    try:
+        version = str(await conn.fetchval("SELECT version()"))
+        if "PGlite" not in version:
+            raise RuntimeError(f"refusing to reset non-PGlite server: {version}")
+        await conn.execute("DROP SCHEMA public CASCADE")
+        await conn.execute("CREATE SCHEMA public")
+    finally:
+        conn.terminate()
+
+
+def alembic_config(url: str, *, pglite: bool = False) -> Config:
     cfg = Config(str(ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "migrations"))
     cfg.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
     cfg.attributes["configure_logging"] = False
+    cfg.attributes["pglite"] = pglite
     return cfg
 
 
@@ -100,8 +208,15 @@ def check_safe_test_url(test_url: str, app_url: str | None) -> None:
 
 
 @pytest.fixture(scope="session")
-def pg_url() -> str:
+def pg_url(integration_db_backend: str, pglite_url: str | None) -> str:
     """Fresh, fully migrated test database (once per session)."""
+    if integration_db_backend == "pglite":
+        if not pglite_url:  # pragma: no cover - fixture invariant
+            pytest.exit("PGlite test server did not provide a database URL", returncode=2)
+        asyncio.run(_reset_pglite_database(pglite_url))
+        command.upgrade(alembic_config(pglite_url, pglite=True), "head")
+        return pglite_url
+
     test_url, app_url = _configured_urls()
     if not test_url:
         pytest.skip(f"TEST_DATABASE_URL is not set — {SKIP_HINT}")
@@ -115,12 +230,19 @@ def pg_url() -> str:
 
 
 @pytest.fixture
-async def db_engine(pg_url: str) -> AsyncIterator[Any]:
-    engine = create_async_engine(pg_url)
+async def db_engine(pg_url: str, integration_db_backend: str) -> AsyncIterator[Any]:
+    pglite = integration_db_backend == "pglite"
+    settings = make_settings(
+        DATABASE_URL=pg_url,
+        PGLITE_MODE=pglite,
+        PGLITE_DATABASE_URL=pg_url,
+        PGLITE_APP_POOL_SIZE=1,
+    )
+    engine = create_engine(settings)
     async with engine.begin() as conn:
         await conn.execute(text(f"TRUNCATE {', '.join(APP_TABLES)} RESTART IDENTITY CASCADE"))
     yield engine
-    await engine.dispose()
+    await engine.dispose(close=not pglite)
 
 
 @pytest.fixture
@@ -133,7 +255,10 @@ ClientFactory = Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]]
 
 @pytest.fixture
 def client_factory(
-    pg_url: str, db_engine: Any, fake_embeddings: FakeEmbeddingsFactory
+    pg_url: str,
+    db_engine: Any,
+    integration_db_backend: str,
+    fake_embeddings: FakeEmbeddingsFactory,
 ) -> ClientFactory:
     """Build a running app + client. Override collaborators/settings per test when needed."""
 
@@ -147,7 +272,15 @@ def client_factory(
         file_store: Any = None,
         **settings_overrides: Any,
     ) -> AsyncIterator[httpx.AsyncClient]:
-        settings = make_settings(DATABASE_URL=pg_url, **settings_overrides)
+        pglite = integration_db_backend == "pglite"
+        values: dict[str, Any] = {
+            "DATABASE_URL": pg_url,
+            "PGLITE_MODE": pglite,
+            "PGLITE_DATABASE_URL": pg_url,
+            "PGLITE_APP_POOL_SIZE": 1,
+        }
+        values.update(settings_overrides)
+        settings = make_settings(**values)
         app = create_app(
             settings,
             generator=generator or FakeGuidanceGenerator(),

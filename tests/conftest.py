@@ -44,6 +44,15 @@ TEST_FERNET_KEY = Fernet.generate_key().decode()
 _TIERS = {"unit": "unit", "integration": "integration", "live": "live"}
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--integration-db",
+        choices=("pglite", "postgres"),
+        default="pglite",
+        help="database backend for integration tests (default: ephemeral PGlite)",
+    )
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Tag every test with its tier marker based on its folder (tests/unit, ...)."""
     for item in items:

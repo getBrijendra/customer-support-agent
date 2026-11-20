@@ -85,8 +85,10 @@ class SqlReadOnlyAdapter:
         values = [args.get(n) for n in names]
         dsn = plain_dsn(await ctx.secret(cfg["dsn_secret"]))
         timeout_ms = int(min(self._timeout, ctx.timeout) * 1000)
+        pglite = False
         try:
-            conn = await asyncpg.connect(dsn, timeout=ctx.timeout)
+            conn = await asyncpg.connect(dsn, timeout=ctx.timeout, statement_cache_size=0)
+            pglite = "PGlite" in str(await conn.fetchval("SELECT version()"))
         except Exception as exc:
             raise AdapterError(f"cannot connect: {type(exc).__name__}") from exc
         try:
@@ -98,7 +100,10 @@ class SqlReadOnlyAdapter:
         except asyncpg.PostgresError as exc:
             raise AdapterError(f"query failed: {type(exc).__name__}: {exc}") from exc
         finally:
-            await conn.close()
+            if pglite:
+                conn.terminate()
+            else:
+                await conn.close()
         return {"rows": [_jsonable(dict(r)) for r in rows], "row_count": len(rows)}
 
 
